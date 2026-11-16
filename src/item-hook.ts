@@ -1,0 +1,94 @@
+import { lookupCrossref, lookupCrossrefByBibliographic, lookupOpenAlexAbstract, type CrossrefClient, type EnrichedMetadata } from "./crossref";
+import { recognize, type RssEntryLike } from "./rules";
+
+type ZoteroItemLike = RssEntryLike & { id?: number; getField?(field: string): unknown; setField?(field: string, value: unknown): void; setCreators?(creators: Array<{ firstName?: string; lastName?: string; creatorType: "author" }>): void; saveTx?(): Promise<unknown>; itemTypeID?: number };
+const pending = new Set<number>();
+const timers = new Map<number, ReturnType<typeof setTimeout>>();
+const processed = new Map<number, string>();
+
+function toEntry(item: ZoteroItemLike): RssEntryLike {
+  const get = (field: string) => item.getField?.(field);
+  return { title: String(get("title") ?? item.title ?? ""), description: String(get("abstractNote") ?? item.description ?? ""), url: String(get("url") ?? item.url ?? ""), DOI: String(get("DOI") ?? item.DOI ?? ""), publisher: String(get("publisher") ?? item.publisher ?? ""), extra: String(get("extra") ?? item.extra ?? "") };
+}
+
+function notifyUser(message: string, kind: "working" | "success" | "failure"): void {
+  Zotero.debug(`[rss-helper] ${message}`);
+  const ProgressWindow = (Zotero as any).ProgressWindow;
+  if (typeof ProgressWindow !== "function") return;
+  const progress = new ProgressWindow({ closeOnClick: true });
+  progress.changeHeadline("RSS Helper");
+  progress.addDescription(message);
+  progress.show();
+  progress.startCloseTimer(kind === "working" ? 1200 : kind === "success" ? 900 : 1800);
+}
+
+function createClient(): CrossrefClient {
+  return { request: (method, url, options) => Zotero.HTTP.request(method, url, options as any) as Promise<{ response: string | object }> };
+}
+
+function applyMetadata(item: ZoteroItemLike, metadata: EnrichedMetadata): number {
+  const fields: Array<[string, unknown]> = [["DOI", metadata.DOI], ["title", metadata.title], ["publicationTitle", metadata.publicationTitle], ["date", metadata.date], ["url", metadata.url], ["publisher", metadata.publisher], ["abstractNote", metadata.abstractNote]];
+  for (const [field, value] of fields) if (value !== undefined && value !== "") item.setField?.(field, value);
+  if (metadata.creators?.length) item.setCreators?.(metadata.creators);
+  return fields.filter(([, value]) => value !== undefined && value !== "").length + (metadata.creators?.length ? 1 : 0);
+}
+
+function itemFingerprint(item: ZoteroItemLike): string {
+  const get = (field: string) => item.getField?.(field);
+  return [get("DOI"), get("title"), get("url"), get("abstractNote")].map((value) => String(value ?? "")).join("\u001f");
+}
+
+function isFeedItem(item: ZoteroItemLike): boolean {
+  if (item.itemTypeID === 22) return true;
+  if (typeof item.isFeedItem === "function") return item.isFeedItem();
+  if (item.isFeedItem === true) return true;
+  return item.itemTypeID === undefined;
+}
+
+export async function enrichItem(item: ZoteroItemLike): Promise<void> {
+  if (!item.id || pending.has(item.id)) return;
+  if (!isFeedItem(item)) return;
+  const fingerprint = itemFingerprint(item);
+  if (processed.get(item.id) === fingerprint) return;
+  pending.add(item.id);
+  try {
+    const entry = toEntry(item);
+    const identity = recognize(entry);
+    notifyUser("Enriching RSS item", "working");
+    const client = createClient();
+    const metadata = identity.doi ? await lookupCrossref(client, identity.doi) : entry.title && entry.title.length >= 10 ? await lookupCrossrefByBibliographic(client, entry.title) : null;
+    if (!metadata) {
+      processed.set(item.id, itemFingerprint(item));
+      notifyUser("No matching metadata found; original RSS data was kept", "failure");
+      return;
+    }
+    let abstractFound = Boolean(metadata.abstractNote);
+    if (!metadata.abstractNote) {
+      try { metadata.abstractNote = await lookupOpenAlexAbstract(client, metadata.DOI); abstractFound = Boolean(metadata.abstractNote); }
+      catch (error) { Zotero.debug(`[rss-helper] OpenAlex abstract lookup failed: ${String(error)}`); }
+    }
+    const fieldCount = applyMetadata(item, metadata);
+    await item.saveTx?.();
+    processed.set(item.id, itemFingerprint(item));
+    notifyUser(`Enriched ${fieldCount}/7 fields${abstractFound ? "" : "; abstract unavailable"}`, "success");
+  } catch (error) {
+    processed.set(item.id, itemFingerprint(item));
+    const detail = String(error).toLowerCase().includes("timed out") ? "network timeout" : "request failed";
+    notifyUser(`Enrichment failed (${detail}); original RSS data was kept`, "failure");
+    Zotero.debug(`[rss-helper] enrichment failure: ${String(error)}`);
+  } finally { pending.delete(item.id); }
+}
+
+const observer = { notify(event: string, type: string, ids: Array<number> | number): void {
+  if (type !== "item" || !["add", "modify"].includes(event)) return;
+  for (const id of Array.isArray(ids) ? ids : [ids]) {
+    const item = Zotero.Items.get(id) as unknown as ZoteroItemLike | undefined;
+    if (!item || item.itemTypeID === 3) continue;
+    const previous = timers.get(id);
+    if (previous) clearTimeout(previous);
+    timers.set(id, setTimeout(() => { timers.delete(id); void enrichItem(item); }, 750));
+  }
+} };
+
+export function registerItemHook(): void { (Zotero.Notifier as any).registerObserver(observer, ["item"]); Zotero.debug("[rss-helper] item observer registered"); }
+export function unregisterItemHook(): void { (Zotero.Notifier as any).unregisterObserver(observer); for (const timer of timers.values()) clearTimeout(timer); timers.clear(); pending.clear(); processed.clear(); }

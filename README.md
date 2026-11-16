@@ -1,0 +1,61 @@
+# Zotero RSS Helper
+
+Zotero RSS Helper improves the way paper RSS entries become Zotero items.
+
+## 解决的问题 | Problem
+
+Zotero 的 RSS 默认导入无法可靠地把 RSS 条目匹配到论文元数据。常见结果是：
+
+- RSS 条目没有被识别为对应的论文；
+- 元数据被错误填入，或者 RSS 原文被直接塞进 `description`；
+- DOI、作者、期刊、日期等字段缺失，后续整理成本很高。
+
+Zotero's default RSS import does not reliably match an RSS entry to its paper metadata. It may fill fields with incorrect values, put the RSS feed text directly into `description`, or leave DOI, authors, journal, and date empty.
+
+## 解决方式 | How it works
+
+RSS 条目新增或修改时，插件会：
+
+- 从 URL、DOI、标题、摘要描述和 Extra 中识别 DOI；
+- 通过 Crossref 补全 DOI、标题、作者、期刊、日期、URL、出版社和摘要；
+- 没有 DOI 时，使用标题向 Crossref 查询；
+- Crossref 没有摘要时，尝试使用 OpenAlex 补全摘要；
+- 找不到结果或请求失败时，保留 RSS 条目的原始数据，不覆盖原内容。
+
+When an RSS item is added or changed, the plugin:
+
+- detects a DOI in the URL, DOI field, title, description, or Extra field;
+- fills DOI, title, authors, journal, date, URL, publisher, and abstract from Crossref;
+- searches Crossref by title when no DOI is present;
+- tries OpenAlex when Crossref has no abstract;
+- keeps the original RSS data when matching or network requests fail.
+
+## 要求 | Requirements
+
+- 建议Zotero 10.0 或更高版本 | Zotero 10.0 or later
+- 可访问 Crossref；摘要回退还需要访问 OpenAlex | Network access to Crossref, and OpenAlex for abstract fallback
+
+## 安装 | Install
+
+1. 下载最新的 `zotero-rss-helper-*.xpi`。
+2. 在 Zotero 中打开 **工具 > 附加组件**。
+3. 打开齿轮菜单，选择 **从文件安装附加组件...**，然后选择 XPI 文件。
+4. 按提示重启 Zotero。
+5. Download the latest `zotero-rss-helper-*.xpi` release.
+6. Open **Tools > Add-ons** in Zotero.
+7. Open the gear menu, choose **Install Add-on From File...**, and select the XPI.
+8. Restart Zotero if prompted.
+
+安装后，插件会自动处理新增或修改的 RSS 条目，不需要 API key 或账号。
+
+After installation, the plugin works automatically for new and modified RSS items. No API key or account is required.
+
+## 后续计划 | Roadmap
+
+后续可能增加更精确的来源识别和可选翻译支持，范围会保持克制。
+
+Future releases may add more feed-specific recognition and optional translation support while keeping the workflow small.
+
+## License
+
+MIT

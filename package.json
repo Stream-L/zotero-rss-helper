@@ -1,0 +1,17 @@
+{
+  "name": "zotero-rss-helper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crossref metadata enrichment for Zotero RSS items",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/package.mjs",
+    "check": "node scripts/check.mjs",
+    "test": "npm run build && node scripts/test.mjs",
+    "dev": "powershell -ExecutionPolicy Bypass -File scripts/dev-profile.ps1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "zotero-types": "^3.0.0"
+  }
+}
