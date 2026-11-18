@@ -116,8 +116,25 @@
         preference="extensions.zotero.extensions.rss-helper.useLibraryTags"
       />
       <description class="description">
-        取使用频次最高的 40 个标签写进提示词，帮助模型判断你的方向；也可以点上面的按钮直接归纳成领域描述。不保证合并同义重复的标签。
+        取库内使用频次最高的标签写进提示词，帮助模型判断你的方向；先预览确认，再决定用多少个。不保证合并同义重复的标签。
       </description>
+      <hbox align="center">
+        <label style="width: 110px;">提取标签数量</label>
+        <html:input
+          id="rss-helper-tagHintCount"
+          type="number"
+          min="5"
+          max="120"
+          style="width: 80px;"
+          preference="extensions.zotero.extensions.rss-helper.tagHintCount"
+        />
+        <button
+          id="rss-helper-preview-tags"
+          label="预览库内标签"
+          oncommand="Zotero.RSSHelper.hooks.onPrefsPreviewTags(document)"
+        />
+      </hbox>
+      <description id="rss-helper-tag-preview" class="description"></description>
 
       <label><html:h3>接口</html:h3></label>
       <description class="description">

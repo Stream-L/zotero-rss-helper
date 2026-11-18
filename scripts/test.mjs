@@ -7,6 +7,8 @@ const calls = [];
 const added = [];
 const windows = [];
 const lines = [];
+const dbQueries = [];
+const feedQueries = [];
 let observer;
 const item = {
   id: 7,
@@ -105,10 +107,17 @@ globalThis.Zotero = {
       };
     },
   },
-  Items: { get: (id) => (id === 7 ? item : id === 8 ? rssItem : undefined) },
+  Items: {
+    get: (id) => (id === 7 ? item : id === 8 ? rssItem : undefined),
+    async getAll(libraryID) {
+      feedQueries.push(libraryID);
+      return [tagItem];
+    },
+  },
   Libraries: { userLibraryID: 1 },
   DB: {
-    async queryAsync() {
+    async queryAsync(sql, params) {
+      dbQueries.push({ sql, params });
       return [
         { name: "供应链管理", n: 12 },
         { name: "碳市场", n: 4 },
@@ -124,7 +133,9 @@ globalThis.Zotero = {
       observer = undefined;
     },
   },
-  debug() {},
+  debug(...args) {
+    if (process.env.RSS_HELPER_DEBUG) console.error("[zotero]", ...args);
+  },
 };
 
 const metadata = await lookupCrossref(
@@ -161,9 +172,15 @@ assert.equal(progressWindow.closed, true, "the progress window must close itself
 unregisterItemHook();
 
 // 任务2：设置项走 extensions.rss-helper.* 分支，首次启动补默认值，设置页用完整键名双向绑定。
-const { getSetting, setSetting, ensureDefaults, SETTING_KEYS, TEXT_SETTING_KEYS, FULL_PREF_PREFIX } = await import("../build/src/settings.js");
+const { getSetting, setSetting, ensureDefaults, SETTING_KEYS, TEXT_SETTING_KEYS, FULL_PREF_PREFIX, getTagHintCount } = await import("../build/src/settings.js");
 assert.equal(getSetting("autoEnrich"), true, "missing pref must fall back to the default");
 assert.equal(getSetting("fetchAttachments"), false);
+assert.equal(getTagHintCount(), 40, "tag hint count must default to 40");
+prefs.set("extensions.rss-helper.tagHintCount", "7");
+assert.equal(getTagHintCount(), 7);
+prefs.set("extensions.rss-helper.tagHintCount", "999");
+assert.equal(getTagHintCount(), 120, "tag hint count must be clamped");
+prefs.delete("extensions.rss-helper.tagHintCount");
 setSetting("fetchAttachments", true);
 assert.equal(prefs.get("extensions.rss-helper.fetchAttachments"), true);
 prefs.delete("extensions.rss-helper.fetchAttachments");
@@ -333,29 +350,75 @@ assert.equal(prefs.get("extensions.rss-helper.customPrompt"), promptTextarea.val
 assert.match(promptRequest.messages[0].content, /研究兴趣分析助手/);
 assert.match(promptRequest.messages[1].content, /供应链管理\(12\)/, "tag counts must be passed to the model");
 assert.match(promptStatus.textContent, /已写入/);
-globalThis.Zotero.HTTP.request = originalRequest;
-delete globalThis.Zotero.Tags;
 
-// 任务4：右键菜单同时挂条目菜单和分类菜单，且重复注册不会产生第二个子菜单。
+// 设置页「预览库内标签」：先让用户看清会写进提示词的标签，再决定数量。
+dbQueries.length = 0;
+const preview = { textContent: "" };
+const { onPrefsPreviewTags } = await import("../build/src/prefs-pane.js");
+prefs.set("extensions.rss-helper.tagHintCount", "6");
+await onPrefsPreviewTags({ getElementById: (id) => (id === "rss-helper-tag-preview" ? preview : null) });
+assert.equal(dbQueries.at(-1).params[1], 6, "preview must use the configured tag count");
+assert.match(preview.textContent, /供应链管理\(12\)/);
+assert.match(preview.textContent, /前 2 个/);
+prefs.delete("extensions.rss-helper.tagHintCount");
+globalThis.Zotero.HTTP.request = originalRequest;
+
+// 任务4：右键菜单同时挂条目菜单和 RSS 订阅/分类菜单，且重复注册不会产生第二个子菜单。
 const menuRoot = { children: [], appendChild(child) { this.children.push(child); } };
 const collectionRoot = { children: [], appendChild(child) { this.children.push(child); } };
 const fakeDoc = {
   getElementById: () => null,
   querySelector: (selector) =>
     selector === "#zotero-itemmenu" ? menuRoot : selector === "#zotero-collectionmenu" ? collectionRoot : null,
-  createXULElement: (tag) => ({ tagName: tag, attrs: {}, children: [], setAttribute(k, v) { this.attrs[k] = v; }, addEventListener() {}, appendChild(child) { this.children.push(child); }, remove() {} }),
+  createXULElement: (tag) => ({
+    tagName: tag,
+    attrs: {},
+    children: [],
+    listeners: {},
+    setAttribute(k, v) { this.attrs[k] = v; },
+    addEventListener(type, fn) { this.listeners[type] = fn; },
+    appendChild(child) { this.children.push(child); },
+    remove() {},
+  }),
 };
-const fakeWin = { document: fakeDoc, ZoteroPane: { getSelectedItems: () => [tagItem], getSelectedCollection: () => null } };
+const fakeWin = {
+  document: fakeDoc,
+  ZoteroPane: {
+    getSelectedItems: () => [tagItem],
+    getSelectedCollection: () => null,
+    getSelectedLibraryID: () => 9,
+  },
+};
+globalThis.Zotero.Feeds = { get: (libraryID) => (libraryID === 9 ? { isFeed: true, name: "Journal Feed" } : undefined) };
 const { registerContextMenu, unregisterContextMenu } = await import("../build/src/menu.js");
 registerContextMenu(fakeWin);
 registerContextMenu(fakeWin);
 const menus = menuRoot.children.filter((child) => child.id === "rss-helper-itemmenu");
 assert.equal(menus.length, 1, "context menu must be idempotent");
-assert.equal(menus[0].children[0].children.length, 4, "item menu must expose four actions");
+assert.equal(menus[0].children[0].children.length, 5, "item menu must expose five actions (including the rss/test probe)");
 const collectionMenus = collectionRoot.children.filter((child) => child.id === "rss-helper-collectionmenu");
 assert.equal(collectionMenus.length, 1, "collection menu must be mounted once");
-assert.equal(collectionMenus[0].children[0].children.length, 2, "collection menu must expose screen and clear");
+assert.equal(collectionMenus[0].children[0].children.length, 3, "collection menu must expose screen/clear/test");
+
+// 测试按钮：条目右键给 rss/test 打灰蓝色，确认菜单→打标签→设色链路。
+tagItem.tags = [];
+menus[0].children[0].children[4].listeners.command();
+await new Promise((resolve) => setTimeout(resolve, 30));
+assert.ok(tagItem.tags.includes("rss/test"), "the probe action must add rss/test to the selected item");
+assert.deepEqual(colorCall, { libraryID: 1, name: "rss/test", color: "#5c7c9a" }, "rss/test must get the gray-blue color");
+
+// RSS 订阅右键：feed 选中时通过 libraryID 取条目并整批 AI 筛选。
+tagItem.tags = [];
+globalThis.Zotero.HTTP.request = async () => ({
+  response: { choices: [{ message: { content: JSON.stringify({ level: "important", score: 5, reason: "相关", topic: "运营" }) } }] },
+});
+feedQueries.length = 0;
+collectionMenus[0].children[0].children[0].listeners.command();
+await new Promise((resolve) => setTimeout(resolve, 80));
+assert.ok(feedQueries.includes(9), "feed menu action must read items of the selected feed library");
+assert.ok(tagItem.tags.includes(levelTag("important")), "feed screening must tag important items");
 unregisterContextMenu(fakeWin);
+globalThis.Zotero.HTTP.request = originalRequest;
 
 
 const bundle = readFileSync(new URL("../build/bootstrap.js", import.meta.url), "utf8");

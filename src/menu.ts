@@ -5,7 +5,7 @@
  * Zotero 7+ 用 createXULElement 创建菜单项，重复注册时按 id 去重。
  */
 import { enrichItem } from "./item-hook";
-import { clearAiTags, screenCollection, screenItems, type ItemLike } from "./screen";
+import { applyTestTag, clearAiTags, screenCollection, screenFeed, screenItems, type ItemLike } from "./screen";
 import { toast } from "./toast";
 import { translateItems } from "./translate";
 
@@ -24,6 +24,7 @@ type WinLike = {
   ZoteroPane?: {
     getSelectedItems(): any[];
     getSelectedCollection?(): CollectionLike | false | null;
+    getSelectedLibraryID?(): number | false | null;
   };
 };
 
@@ -42,6 +43,42 @@ function selectedCollection(win: WinLike): CollectionLike | null {
     return win.ZoteroPane?.getSelectedCollection?.() || null;
   } catch {
     return null;
+  }
+}
+
+/** 选中的是 RSS 订阅时，ZoteroPane 给的是该 feed library 的 libraryID。 */
+function selectedFeedLibraryID(win: WinLike): number | null {
+  try {
+    const libraryID = Number(win.ZoteroPane?.getSelectedLibraryID?.() ?? 0);
+    if (!libraryID) return null;
+    const feeds = (Zotero as unknown as { Feeds?: { get?(libraryID: number): unknown } }).Feeds;
+    return feeds?.get?.(libraryID) ? libraryID : null;
+  } catch {
+    return null;
+  }
+}
+
+async function collectionItems(collection: CollectionLike | null): Promise<ItemLike[]> {
+  if (!collection) return [];
+  try {
+    await collection.loadAllData?.();
+  } catch {}
+  return ((collection.getChildItems?.(false, false) ?? []) as ItemLike[]).filter(
+    (item) => item && typeof item.getField === "function",
+  );
+}
+
+async function feedItems(libraryID: number | null): Promise<ItemLike[]> {
+  if (!libraryID) return [];
+  try {
+    const raw = (await (Zotero.Items as unknown as { getAll(libraryID: number, onlyTopLevel?: boolean): Promise<unknown[]> }).getAll(
+      libraryID,
+      true,
+    )) as unknown[];
+    return raw.filter((item): item is ItemLike => !!item && typeof (item as ItemLike).getField === "function");
+  } catch (error) {
+    Zotero.debug(`[rss-helper] failed to load feed items: ${String(error)}`);
+    return [];
   }
 }
 
@@ -113,6 +150,15 @@ function registerItemMenu(win: WinLike): void {
     }
     clearTags(items);
   });
+
+  addMenuItem(doc, popup, "测试：打 rss/test 灰蓝标签", () => {
+    const items = selectedItems(win);
+    if (!items.length) {
+      toast.show("请先选择条目", "cross");
+      return;
+    }
+    void applyTestTag(items as ItemLike[]);
+  });
 }
 
 /** 分类菜单：整批筛选一个期刊/专题。 */
@@ -126,25 +172,40 @@ function registerCollectionMenu(win: WinLike): void {
   }
   const popup = addMenu(doc, collectionmenu, COLLECTION_MENU_ID);
 
-  addMenuItem(doc, popup, "AI 筛选此分类", async () => {
+  addMenuItem(doc, popup, "AI 筛选此分类 / RSS 订阅", async () => {
     const collection = selectedCollection(win);
-    if (!collection) {
-      toast.show("请先选择一个分类", "cross");
+    if (collection) {
+      await screenCollection(collection);
       return;
     }
-    await screenCollection(collection);
+    const feedLibraryID = selectedFeedLibraryID(win);
+    if (!feedLibraryID) {
+      toast.show("请先选择一个分类或 RSS 订阅", "cross");
+      return;
+    }
+    await screenFeed(feedLibraryID);
   });
 
   addMenuItem(doc, popup, "清除此分类的 AI 标记", async () => {
     const collection = selectedCollection(win);
-    if (!collection) {
-      toast.show("请先选择一个分类", "cross");
+    const feedLibraryID = collection ? null : selectedFeedLibraryID(win);
+    if (!collection && !feedLibraryID) {
+      toast.show("请先选择一个分类或 RSS 订阅", "cross");
       return;
     }
-    try {
-      await collection.loadAllData?.();
-    } catch {}
-    clearTags((collection.getChildItems?.(false, false) ?? []) as ItemLike[]);
+    const items = collection ? await collectionItems(collection) : await feedItems(feedLibraryID);
+    clearTags(items);
+  });
+
+  addMenuItem(doc, popup, "测试：给此分类打 rss/test 标签", async () => {
+    const collection = selectedCollection(win);
+    const feedLibraryID = collection ? null : selectedFeedLibraryID(win);
+    if (!collection && !feedLibraryID) {
+      toast.show("请先选择一个分类或 RSS 订阅", "cross");
+      return;
+    }
+    const items = collection ? await collectionItems(collection) : await feedItems(feedLibraryID);
+    await applyTestTag(items, collection?.name ? `测试：${collection.name}` : "测试：RSS 订阅");
   });
 }
 

@@ -28,6 +28,7 @@ export const TEXT_SETTINGS = {
   tagImportant: "RSS/重要",
   tagWatch: "RSS/关注",
   tagSkip: "RSS/略过",
+  tagHintCount: "40",
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -81,6 +82,13 @@ export function setTextSetting<K extends TextSettingKey>(key: K, value: string):
   } catch (error) {
     Zotero.debug(`[rss-helper] failed to write pref ${PREF_BRANCH}${key}: ${String(error)}`);
   }
+}
+
+/** 写进提示词的库内标签数量：用户可以在设置页预览后自己定，限制 5–120。 */
+export function getTagHintCount(): number {
+  const parsed = Number.parseInt(getTextSetting("tagHintCount"), 10);
+  if (!Number.isFinite(parsed)) return 40;
+  return Math.min(120, Math.max(5, parsed));
 }
 
 export function getRawPref(key: string): unknown {

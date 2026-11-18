@@ -1,7 +1,7 @@
 import { lookupCrossref, mergeMetadata } from "./crossref";
 import { registerItemHook, unregisterItemHook } from "./item-hook";
 import { registerContextMenu, unregisterContextMenu } from "./menu";
-import { PLUGIN_ID, onPrefsCommand, onPrefsGeneratePrompt, onPrefsLoad, registerPreferencePane } from "./prefs-pane";
+import { PLUGIN_ID, onPrefsCommand, onPrefsGeneratePrompt, onPrefsLoad, onPrefsPreviewTags, registerPreferencePane } from "./prefs-pane";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
 import { ensureDefaults } from "./settings";
@@ -35,7 +35,7 @@ export function startup(data?: StartupData): void {
   Zotero.debug(`[rss-helper] startup (rootURI=${rootURI ?? "unknown"})`);
   (Zotero as unknown as { RSSHelper?: unknown }).RSSHelper = {
     version: data?.version ?? "",
-    hooks: { onPrefsLoad, onPrefsCommand, onPrefsGeneratePrompt },
+    hooks: { onPrefsLoad, onPrefsCommand, onPrefsGeneratePrompt, onPrefsPreviewTags },
   };
   try {
     ensureDefaults();
@@ -43,6 +43,7 @@ export function startup(data?: StartupData): void {
   } catch (error) {
     Zotero.debug(`[rss-helper] item observer setup failed: ${String(error)}`);
   }
+  registerExistingWindows();
   if (!rootURI) {
     Zotero.debug("[rss-helper] no rootURI in startup data; settings pane not registered");
     return;
@@ -50,6 +51,28 @@ export function startup(data?: StartupData): void {
   void registerPreferencePane(rootURI).catch((error: unknown) => {
     Zotero.debug(`[rss-helper] preference pane registration failed: ${String(error)}`);
   });
+}
+
+/**
+ * Zotero 只对新打开的窗口调用 onMainWindowLoad；插件在运行时安装时，当前已开的主窗口不会被补调，
+ * 右键菜单就会一直不出现。所以启动后再主动给现有窗口注册一遍。
+ */
+function registerExistingWindows(): void {
+  const ready = (Zotero as unknown as { uiReadyPromise?: Promise<unknown> }).uiReadyPromise ?? Promise.resolve();
+  void ready
+    .then(() => {
+      const wins = ((Zotero as unknown as { getMainWindows?: () => any[] }).getMainWindows?.() ?? []) as any[];
+      for (const win of wins) {
+        try {
+          registerContextMenu(win);
+        } catch (error) {
+          Zotero.debug(`[rss-helper] context menu registration failed for existing window: ${String(error)}`);
+        }
+      }
+    })
+    .catch((error: unknown) => {
+      Zotero.debug(`[rss-helper] failed to register menus in existing windows: ${String(error)}`);
+    });
 }
 
 export function onMainWindowLoad(data?: { window?: any }): void {

@@ -61,16 +61,16 @@ After installation, the plugin works automatically for new and modified RSS item
 - **我的研究领域与偏好**：一段自然语言，写清方向、方法偏好、不想要的内容；原样进入提示词，可以同时写多个领域；
 - **重要 / 关注 / 略过标签名**：默认 `RSS/重要`、`RSS/关注`、`RSS/略过`，可改成自己习惯的命名；
 - **给「略过」也打灰色标签**：默认关闭，略过的条目不打标签；
-- **把库内常用标签作为研究领域的线索**：把使用频次最高的 40 个标签写进提示词，帮助模型判断你的方向；设置页另有「从库内标签归纳领域」按钮，可让模型把标签总结成领域描述、直接填进提示词（默认开启）；
+- **把库内常用标签作为研究领域的线索**：把使用频次最高的若干标签写进提示词，帮助模型判断你的方向；「提取标签数量」控制取前几个（默认 40，范围 5–120），改完点「预览库内标签」就能先看清这批标签和条目数，再点「从库内标签归纳领域」让模型总结成领域描述（默认开启）；
 - **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务。API Key 留空时自动读取本机 **Zotero GPT** 插件（`zoterogpt@polygon.org`）保存的 `extensions.zotero.zoterogpt.*`；自己填的 Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。
 
-Settings cover auto-enrichment, optional PDF lookup, auto-translation through Translate for Zotero, and AI screening. The screening prompt is driven by a free-form description of your research areas. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store.
+Settings cover auto-enrichment, optional PDF lookup, auto-translation through Translate for Zotero, and AI screening. Tag hints are configurable in count and can be previewed before use; the "generate domain prompt" button turns them into a research-area description. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store.
 
 ## AI 筛选 | AI screening
 
 - 只标「重要」和「关注」，略过默认不标；重复筛选会替换旧标签，不会越积越多；
-- 支持多选条目右键筛选，也支持在**分类**（期刊/专题）上右键整批筛选；
-- 库内高频标签会作为「研究领域线索」写进系统提示词；设置页的「从库内标签归纳领域」可以把这些标签总结成一段领域描述，直接覆盖自定义提示词；
+- 支持多选条目右键筛选，也支持在**分类**（期刊/专题）或 **RSS 订阅**上右键整批筛选；
+- 库内高频标签会作为「研究领域线索」写进系统提示词；设置页可以先预览标签、决定数量，再「从库内标签归纳领域」生成一段领域描述；
 - 模型可以先调用内置工具 `get_item_details`（读完整摘要、Extra、已有标签）和 `get_library_tags`（读库内高频标签），再给结论；最多两轮工具调用，最后强制 JSON 输出；
 - 返回 `level`、`score`、`reason`、`topic`，可选 `suggestedTag`（必须来自库内高频标签）。
 
@@ -85,12 +85,15 @@ Screening tags only "important" and "watch" by default, works on multi-selected 
 - **AI 筛选：重要 / 关注**：调用大模型分级，按设置的标签名打彩色标签；
 - **清除 AI 标记**：移除三个等级标签，不影响其他标签。
 
-在左侧**分类**上右键 **RSS Helper** 子菜单：
+在左侧**分类**或 **RSS 订阅**上右键 **RSS Helper** 子菜单：
 
-- **AI 筛选此分类**：把这个期刊/专题下的条目整批送去做重要性筛选；
-- **清除此分类的 AI 标记**：批量移除等级标签。
+- **AI 筛选此分类 / RSS 订阅**：把这个期刊/专题/订阅下的条目整批送去做重要性筛选；
+- **清除此分类的 AI 标记**：批量移除等级标签；
+- **测试：给此分类打 rss/test 标签**：只打一个灰蓝色 `rss/test`，用来确认菜单、打标签、设色链路是通的。
 
-On items: enrich, translate, AI-screen, clear AI tags. On a collection: screen the whole collection or clear its AI tags.
+条目菜单里也有同样的「测试：打 rss/test 灰蓝标签」，先跑它确认右键没问题，再跑 AI 筛选。
+
+On items: enrich, translate, AI-screen, clear AI tags, and a `rss/test` probe. On a collection or an RSS feed: screen everything, clear AI tags, or run the probe.
 
 ## 后续计划 | Roadmap
 

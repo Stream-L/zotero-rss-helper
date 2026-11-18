@@ -7,7 +7,7 @@
  */
 import { chatWithTools, getLlmProfile, type ToolDefinition } from "./llm";
 import { enrichmentProgress } from "./progress";
-import { getSetting, getTextSetting } from "./settings";
+import { getSetting, getTagHintCount, getTextSetting } from "./settings";
 import { toast } from "./toast";
 
 export type Level = "important" | "watch" | "skip";
@@ -51,7 +51,11 @@ const tagCache = new Map<number, TagStat[]>();
  * 取库内使用频次最高的标签。用途是让模型据此推断用户的研究领域（写进系统提示词），
  * 而不是把标签原样丢回去当筛选结果。
  */
-export async function fetchLibraryTagStats(libraryID: number, limit = 40, refresh = false): Promise<TagStat[]> {
+export async function fetchLibraryTagStats(
+  libraryID: number,
+  limit = getTagHintCount(),
+  refresh = false,
+): Promise<TagStat[]> {
   const cached = refresh ? undefined : tagCache.get(libraryID);
   if (cached) return cached;
   const db = (Zotero as unknown as { DB?: { queryAsync(sql: string, params: unknown[]): Promise<unknown[]> } }).DB;
@@ -73,7 +77,7 @@ export async function fetchLibraryTagStats(libraryID: number, limit = 40, refres
   }
 }
 
-export async function fetchLibraryTags(libraryID: number, limit = 40): Promise<string[]> {
+export async function fetchLibraryTags(libraryID: number, limit = getTagHintCount()): Promise<string[]> {
   return (await fetchLibraryTagStats(libraryID, limit)).map((stat) => stat.name);
 }
 
@@ -209,7 +213,7 @@ function toolsFor(item: ItemLike, context: ScreenContext | undefined): ToolDefin
         description: "读取当前文献库中使用频次最高的标签，用于推荐已有标签。",
         parameters: { type: "object", properties: { limit: { type: "integer", minimum: 10, maximum: 80 } } },
       },
-      run: async (args) => ({ tags: await fetchLibraryTags(item.libraryID, Number(args.limit) || 40) }),
+      run: async (args) => ({ tags: await fetchLibraryTags(item.libraryID, Number(args.limit) || getTagHintCount()) }),
     },
   ];
   if (!getSetting("useLibraryTags")) return tools.slice(0, 1);
@@ -290,4 +294,51 @@ export async function screenCollection(collection: CollectionLike, source = "AI 
   }
   const label = collection.name ? `${source}：${collection.name}` : source;
   await screenItems(items, label);
+}
+
+/** RSS 订阅右键入口：一个订阅就是一个 feed library，条目存在该库里。 */
+export async function screenFeed(libraryID: number, source = "AI 筛选 RSS 订阅"): Promise<void> {
+  let raw: unknown[] = [];
+  try {
+    raw = (await (Zotero.Items as unknown as { getAll(libraryID: number, onlyTopLevel?: boolean): Promise<unknown[]> }).getAll(
+      libraryID,
+      true,
+    )) as unknown[];
+  } catch (error) {
+    Zotero.debug(`[rss-helper] failed to load feed items: ${String(error)}`);
+  }
+  const items = raw.filter((item): item is ItemLike => !!item && typeof (item as ItemLike).getField === "function");
+  if (!items.length) {
+    toast.show("这个 RSS 订阅里没有可筛选的条目", "cross");
+    return;
+  }
+  await screenItems(items, source);
+}
+
+/** 测试用标签：灰蓝色，用来确认右键菜单、打标签、设色这条链路是通的。 */
+export const TEST_TAG = "rss/test";
+export const TEST_TAG_COLOR = "#5c7c9a";
+
+export async function applyTestTag(items: ItemLike[], source = "测试"): Promise<void> {
+  const targets = items.filter((item) => item && typeof item.addTag === "function");
+  if (!targets.length) {
+    toast.show("请先选择条目", "cross");
+    return;
+  }
+  let tagged = 0;
+  for (const item of targets) {
+    try {
+      item.addTag(TEST_TAG);
+      await item.saveTx?.();
+      tagged += 1;
+    } catch (error) {
+      Zotero.debug(`[rss-helper] test tag failed for item ${item.id}: ${String(error)}`);
+    }
+  }
+  if (!tagged) {
+    toast.show("打标签失败，请看调试日志", "cross");
+    return;
+  }
+  await colorize(targets[0].libraryID, TEST_TAG, TEST_TAG_COLOR);
+  toast.show(`${source}：${tagged} 项已打上 ${TEST_TAG}`, "tick");
 }
