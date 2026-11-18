@@ -58,9 +58,22 @@ After installation, the plugin works automatically for new and modified RSS item
 - **补全成功后尝试下载可用的 PDF**：通过 DOI、URL、开放获取渠道查找附件（默认关闭）；
 - **补全元数据后自动翻译标题和摘要**：复用本机 Translate for Zotero 插件，译文写进 Extra 的 `titleTranslation` / `abstractTranslation`（默认关闭）；
 - **补全元数据后自动判断重要性**：调用大模型给条目分级并打彩色标签（默认关闭）；
-- **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务；API Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。
+- **我的研究领域与偏好**：一段自然语言，写清方向、方法偏好、不想要的内容；原样进入提示词，可以同时写多个领域；
+- **重要 / 关注 / 略过标签名**：默认 `RSS/重要`、`RSS/关注`、`RSS/略过`，可改成自己习惯的命名；
+- **给「略过」也打灰色标签**：默认关闭，略过的条目不打标签；
+- **参考库内常用标签**：把使用频次最高的 40 个标签作为候选，让模型优先复用已有标签，避免自己造词（默认开启）；
+- **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务。API Key 留空时自动读取本机 **Zotero GPT** 插件（`zoterogpt@polygon.org`）保存的 `extensions.zotero.zoterogpt.*`；自己填的 Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。
 
-Settings live under **Tools > Settings > RSS Helper**: auto-enrichment, optional PDF lookup, auto-translation through Translate for Zotero, and optional AI importance screening with an OpenAI-compatible endpoint. The API key is encrypted with the OS key store before being written to preferences.
+Settings cover auto-enrichment, optional PDF lookup, auto-translation through Translate for Zotero, and AI screening. The screening prompt is driven by a free-form description of your research areas. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store.
+
+## AI 筛选 | AI screening
+
+- 只标「重要」和「关注」，略过默认不标；重复筛选会替换旧标签，不会越积越多；
+- 支持多选条目右键筛选，也支持在**分类**（期刊/专题）上右键整批筛选；
+- 模型可以先调用内置工具 `get_item_details`（读完整摘要、Extra、已有标签）和 `get_library_tags`（读库内高频标签），再给结论；最多两轮工具调用，最后强制 JSON 输出；
+- 返回 `level`、`score`、`reason`、`topic`，可选 `suggestedTag`（必须来自库内高频标签）。
+
+Screening tags only "important" and "watch" by default, works on multi-selected items and on a whole collection via its context menu, and lets the model call two read-only tools (item details, library tag frequency) before answering. Only two tool rounds are allowed, then a JSON answer is forced.
 
 ## 右键菜单 | Context menu
 
@@ -68,16 +81,22 @@ Settings live under **Tools > Settings > RSS Helper**: auto-enrichment, optional
 
 - **补全元数据**：对选中的 RSS 条目立即执行 Crossref 补全；
 - **翻译标题和摘要**：调用 Translate for Zotero 翻译并写入 Extra；
-- **AI 判断重要性**：调用大模型分级，打上 `RSS/重要`（红）、`RSS/关注`（黄）、`RSS/略过`（灰）标签；
-- **清除 AI 标记**：移除上述三个标签，不影响其他标签。
+- **AI 筛选：重要 / 关注**：调用大模型分级，按设置的标签名打彩色标签；
+- **清除 AI 标记**：移除三个等级标签，不影响其他标签。
 
-Select items and use the **RSS Helper** submenu: enrich, translate, screen with AI (colored tags), or clear AI tags.
+在左侧**分类**上右键 **RSS Helper** 子菜单：
+
+- **AI 筛选此分类**：把这个期刊/专题下的条目整批送去做重要性筛选；
+- **清除此分类的 AI 标记**：批量移除等级标签。
+
+On items: enrich, translate, AI-screen, clear AI tags. On a collection: screen the whole collection or clear its AI tags.
 
 ## 后续计划 | Roadmap
 
-后续可能增加更精确的来源识别和可选翻译支持，范围会保持克制。
+- 用邮件订阅 Google Scholar 的关键词提醒，转成 RSS 分类，复用本套补全 + 筛选流程（待做）；
+- 更精确的来源识别，以及基于标签共现的轻量聚类，用来合并同义重复标签（待做）。
 
-Future releases may add more feed-specific recognition and optional translation support while keeping the workflow small.
+Future work: turn Google Scholar e-mail alerts into RSS collections that reuse this enrichment and screening pipeline, and add lightweight tag co-occurrence merging for synonymous tags.
 
 ## License
 

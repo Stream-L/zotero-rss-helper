@@ -8,11 +8,26 @@ export const SETTINGS = {
   fetchAttachments: false,
   autoTranslate: false,
   autoScreen: false,
+  markSkipped: false,
+  useLibraryTags: true,
 } as const;
+
+const DEFAULT_CUSTOM_PROMPT = [
+  "我研究管理科学与工程（请改成你自己的方向，可写多个）：",
+  "1. 供应链与运营管理：库存、定价、风险传染、采购契约；",
+  "2. 平台经济与算法治理：推荐系统、算法定价、监管与合规；",
+  "3. 能源与环境政策：碳市场、绿色供应链、ESG。",
+  "偏好有实证识别（DID、IV、RDD、实验）或优化建模的文章；",
+  "不关心纯综述、征稿启事、会议通知、书评和无摘要的新闻稿。",
+].join("\n");
 
 export const TEXT_SETTINGS = {
   llmBaseUrl: "https://api.siliconflow.cn/v1",
   llmModel: "Qwen/Qwen3-8B",
+  customPrompt: DEFAULT_CUSTOM_PROMPT,
+  tagImportant: "RSS/重要",
+  tagWatch: "RSS/关注",
+  tagSkip: "RSS/略过",
 } as const;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -71,6 +86,15 @@ export function setTextSetting<K extends TextSettingKey>(key: K, value: string):
 export function getRawPref(key: string): unknown {
   try {
     return Zotero.Prefs.get(PREF_BRANCH + key);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 读取插件分支之外的完整 pref 键（例如从 Zotero GPT 插件读配置）。 */
+export function getAbsolutePref(key: string): unknown {
+  try {
+    return Zotero.Prefs.get(key);
   } catch {
     return undefined;
   }

@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "Zotero RSS Helper",
-  "version": "0.3.1",
-  "description": "Enrich Zotero RSS items with DOI and Crossref metadata.",
+  "version": "0.4.0",
+  "description": "Enrich Zotero RSS items with DOI and Crossref metadata, then translate and screen them with AI.",
   "icons": {
     "48": "content/icons/rss-helper.svg",
     "96": "content/icons/rss-helper.svg"

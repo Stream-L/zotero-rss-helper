@@ -204,7 +204,7 @@ const chinese = { id: 12, fields: { title: "标题", abstractNote: "摘要", lan
 assert.equal(await translateItem(chinese), 0, "Chinese items must be skipped");
 delete globalThis.Zotero.PDFTranslate;
 
-// 任务4：AI 分级结果映射成彩色标签，颜色只设一次。
+// 任务4：AI 分级结果映射成彩色标签，颜色只设一次；自定义领域提示词进入 system prompt。
 let colorCall;
 const tagItem = {
   id: 21,
@@ -223,33 +223,109 @@ globalThis.Zotero.OSKeyStore = {
 globalThis.Zotero.Tags = { setColor: async (libraryID, name, color) => { colorCall = { libraryID, name, color }; } };
 prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
 const originalRequest = globalThis.Zotero.HTTP.request;
+let screenRequests = [];
 globalThis.Zotero.HTTP.request = async (method, url, options) => {
-  assert.match(url, /\/chat\/completions$/);
-  assert.match(options.headers.Authorization, /^Bearer test-key$/);
+  const body = JSON.parse(options.body);
+  screenRequests.push({ url, body, auth: options.headers.Authorization });
   return { response: { choices: [{ message: { content: JSON.stringify({ level: "important", score: 5, reason: "方法相关", topic: "LLM" }) } }] } };
 };
-const { screenItem } = await import("../build/src/screen.js");
+const { screenItem, levelTag } = await import("../build/src/screen.js");
 assert.equal(await screenItem(tagItem), "important");
 assert.deepEqual(tagItem.tags, ["RSS/重要"]);
 assert.deepEqual(colorCall, { libraryID: 1, name: "RSS/重要", color: "#e03131" });
 assert.equal(tagItem.saved, true);
+assert.match(screenRequests[0].url, /\/chat\/completions$/);
+assert.match(screenRequests[0].auth, /^Bearer test-key$/);
+assert.equal(screenRequests[0].body.tools[0].function.name, "get_item_details");
+assert.match(screenRequests[0].body.messages[0].content, /管理科学与工程/, "system prompt must embed the custom domain prompt");
+
+// 任务4：工具调用——模型先取条目详情，再返回结论。
+screenRequests = [];
+let toolRound = 0;
+globalThis.Zotero.HTTP.request = async (method, url, options) => {
+  const body = JSON.parse(options.body);
+  screenRequests.push(body);
+  toolRound += 1;
+  if (toolRound === 1) {
+    return { response: { choices: [{ message: { content: "", tool_calls: [{ id: "call_1", function: { name: "get_item_details", arguments: "{}" } }] } }] } };
+  }
+  return { response: { choices: [{ message: { content: JSON.stringify({ level: "watch", score: 3, reason: "方法可借鉴", topic: "库存" }) } }] } };
+};
+const detailItem = {
+  id: 22,
+  libraryID: 1,
+  tags: [],
+  fields: { title: "Inventory control with demand learning", abstractNote: "A model.", publicationTitle: "J", date: "2026" },
+  getField(f) { return this.fields[f]; },
+  addTag(tag) { this.tags.push(tag); },
+  removeTag(tag) { this.tags = this.tags.filter((t) => t !== tag); },
+  async saveTx() { this.saved = true; },
+};
+assert.equal(await screenItem(detailItem), "watch");
+assert.equal(screenRequests.length, 2, "tool round must be followed by a final JSON round");
+assert.equal(screenRequests[1].messages.at(-1).role, "tool");
+assert.match(screenRequests[1].messages.at(-1).content, /Inventory control/);
+
+// 任务4：不填自己的 key 时复用 Zotero GPT 插件的配置。
+screenRequests = [];
+globalThis.Zotero.HTTP.request = async (method, url, options) => {
+  const body = JSON.parse(options.body);
+  screenRequests.push({ url, body, auth: options.headers.Authorization });
+  return { response: { choices: [{ message: { content: JSON.stringify({ level: "skip", score: 1, reason: "与方向无关", topic: "其他" }) } }] } };
+};
+prefs.delete("extensions.rss-helper.apiKeyEnc");
+prefs.set("extensions.zotero.zoterogpt.secretKey", "sk-zoterogpt");
+prefs.set("extensions.zotero.zoterogpt.api", "https://api.siliconflow.cn");
+prefs.set("extensions.zotero.zoterogpt.model", "Qwen/Qwen3-8B");
+const gptItem = {
+  id: 23,
+  libraryID: 1,
+  tags: [],
+  fields: { title: "A survey of everything", abstractNote: "Review.", publicationTitle: "J", date: "2026" },
+  getField(f) { return this.fields[f]; },
+  addTag(tag) { this.tags.push(tag); },
+  removeTag(tag) { this.tags = this.tags.filter((t) => t !== tag); },
+  async saveTx() { this.saved = true; },
+};
+assert.equal(await screenItem(gptItem), "skip");
+assert.deepEqual(gptItem.tags, [], "skipped items must stay untagged by default");
+const gptRequest = screenRequests.at(-1);
+assert.equal(gptRequest.url, "https://api.siliconflow.cn/v1/chat/completions");
+assert.match(gptRequest.auth, /^Bearer sk-zoterogpt$/);
+assert.equal(gptRequest.body.model, "Qwen/Qwen3-8B");
+
+// 任务4：标签名可在设置页改成自己的命名。
+prefs.delete("extensions.zotero.zoterogpt.secretKey");
+prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
+prefs.set("extensions.rss-helper.tagImportant", "AI/必读");
+assert.equal(levelTag("important"), "AI/必读");
+globalThis.Zotero.HTTP.request = async () => ({ response: { choices: [{ message: { content: JSON.stringify({ level: "important", score: 5, reason: "相关", topic: "运营" }) } }] } });
+const renamedItem = { ...tagItem, id: 24, tags: [], fields: { ...tagItem.fields } };
+assert.equal(await screenItem(renamedItem), "important");
+assert.deepEqual(renamedItem.tags, ["AI/必读"]);
+assert.equal(colorCall.name, "AI/必读");
 globalThis.Zotero.HTTP.request = originalRequest;
 delete globalThis.Zotero.Tags;
 
-// 任务4：右键菜单按条目菜单 id 挂载，且重复注册不会产生第二个子菜单。
+// 任务4：右键菜单同时挂条目菜单和分类菜单，且重复注册不会产生第二个子菜单。
 const menuRoot = { children: [], appendChild(child) { this.children.push(child); } };
+const collectionRoot = { children: [], appendChild(child) { this.children.push(child); } };
 const fakeDoc = {
   getElementById: () => null,
-  querySelector: (selector) => (selector === "#zotero-itemmenu" ? menuRoot : null),
+  querySelector: (selector) =>
+    selector === "#zotero-itemmenu" ? menuRoot : selector === "#zotero-collectionmenu" ? collectionRoot : null,
   createXULElement: (tag) => ({ tagName: tag, attrs: {}, children: [], setAttribute(k, v) { this.attrs[k] = v; }, addEventListener() {}, appendChild(child) { this.children.push(child); }, remove() {} }),
 };
-const fakeWin = { document: fakeDoc, ZoteroPane: { getSelectedItems: () => [tagItem] } };
+const fakeWin = { document: fakeDoc, ZoteroPane: { getSelectedItems: () => [tagItem], getSelectedCollection: () => null } };
 const { registerContextMenu, unregisterContextMenu } = await import("../build/src/menu.js");
 registerContextMenu(fakeWin);
 registerContextMenu(fakeWin);
 const menus = menuRoot.children.filter((child) => child.id === "rss-helper-itemmenu");
 assert.equal(menus.length, 1, "context menu must be idempotent");
-assert.equal(menus[0].children[0].children.length, 4, "menu must expose four actions");
+assert.equal(menus[0].children[0].children.length, 4, "item menu must expose four actions");
+const collectionMenus = collectionRoot.children.filter((child) => child.id === "rss-helper-collectionmenu");
+assert.equal(collectionMenus.length, 1, "collection menu must be mounted once");
+assert.equal(collectionMenus[0].children[0].children.length, 2, "collection menu must expose screen and clear");
 unregisterContextMenu(fakeWin);
 
 

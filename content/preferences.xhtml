@@ -52,7 +52,68 @@
         preference="extensions.zotero.extensions.rss-helper.autoScreen"
       />
       <description class="description">
-        关闭后仍可在条目右键菜单里手动筛选。
+        关闭后仍可在条目右键菜单里手动筛选；支持多选条目，也支持在分类上右键整批筛选。
+      </description>
+
+      <label><html:h3>我的研究领域与偏好</html:h3></label>
+      <description class="description">
+        用自然语言写清你的方向、关注的方法、不想要的内容。这段会原样进入提示词，写得越具体筛选越准。
+      </description>
+      <html:textarea
+        id="rss-helper-customPrompt"
+        rows="8"
+        style="width: 460px;"
+        preference="extensions.zotero.extensions.rss-helper.customPrompt"
+      ></html:textarea>
+
+      <label><html:h3>标签</html:h3></label>
+      <description class="description">
+        重要和关注会给条目打上彩色标签；略过默认不打标签。标签名可以改成你习惯的叫法。
+      </description>
+      <hbox align="center">
+        <label style="width: 90px;">重要标签</label>
+        <html:input
+          id="rss-helper-tagImportant"
+          type="text"
+          style="width: 220px;"
+          preference="extensions.zotero.extensions.rss-helper.tagImportant"
+        />
+      </hbox>
+      <hbox align="center">
+        <label style="width: 90px;">关注标签</label>
+        <html:input
+          id="rss-helper-tagWatch"
+          type="text"
+          style="width: 220px;"
+          preference="extensions.zotero.extensions.rss-helper.tagWatch"
+        />
+      </hbox>
+      <hbox align="center">
+        <label style="width: 90px;">略过标签</label>
+        <html:input
+          id="rss-helper-tagSkip"
+          type="text"
+          style="width: 220px;"
+          preference="extensions.zotero.extensions.rss-helper.tagSkip"
+        />
+      </hbox>
+      <checkbox
+        id="rss-helper-markSkipped"
+        label="给「略过」也打灰色标签"
+        preference="extensions.zotero.extensions.rss-helper.markSkipped"
+      />
+      <checkbox
+        id="rss-helper-useLibraryTags"
+        label="参考库内常用标签，让模型优先复用已有标签"
+        preference="extensions.zotero.extensions.rss-helper.useLibraryTags"
+      />
+      <description class="description">
+        取使用频次最高的 40 个标签作为候选，避免模型自己造新词；不保证处理同义重复的标签。
+      </description>
+
+      <label><html:h3>接口</html:h3></label>
+      <description class="description">
+        留空 API Key 时会自动读取本机 Zotero GPT 插件（zoterogpt@polygon.org）保存的接口、模型和密钥；也可以在这里单独填一套。
       </description>
       <label>接口地址</label>
       <html:input

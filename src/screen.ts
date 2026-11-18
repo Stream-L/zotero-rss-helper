@@ -1,43 +1,37 @@
 /**
- * AI 重要文献筛选：让模型给 RSS 条目分级，用彩色标签标出来。
- * 标签颜色通过 Zotero.Tags.setColor(libraryID, tag, color) 设置。
+ * AI 重要文献筛选：让模型给条目分级，用彩色标签标出「重要」和「值得看看」。
+ * - 支持多选条目、整个分类批量筛选；
+ * - 只给重要/关注打标签，略过的不标（可在设置里打开灰色标签）；
+ * - 模型可先调用工具查条目详情和库内常用标签，再下结论；
+ * - 标签名可在设置页改，颜色由 Zotero.Tags.setColor 设置。
  */
-import { chatJSON, hasApiKey } from "./llm";
+import { chatWithTools, getLlmProfile, type ToolDefinition } from "./llm";
+import { enrichmentProgress } from "./progress";
+import { getSetting, getTextSetting } from "./settings";
 import { toast } from "./toast";
 
-export const LEVELS = {
-  important: { tag: "RSS/重要", color: "#e03131", icon: "tick" },
-  watch: { tag: "RSS/关注", color: "#f59f00", icon: "feed" },
-  skip: { tag: "RSS/略过", color: "#868e96", icon: "minus-circle" },
-} as const;
+export type Level = "important" | "watch" | "skip";
 
-export type Level = keyof typeof LEVELS;
+/** 颜色固定，标签名从设置读，用户可以改成自己的命名。 */
+export const LEVEL_COLORS: Record<Level, string> = {
+  important: "#e03131",
+  watch: "#f59f00",
+  skip: "#868e96",
+};
 
 const LEVEL_KEYS: Level[] = ["important", "watch", "skip"];
 
-const SYSTEM_PROMPT =
-  "你是科研文献筛选助手。判断一篇 RSS 推送的论文对一位管理科学与工程方向研究者的重要性。" +
-  "只返回 JSON 对象，不要输出其他文本。";
-
-function userPrompt(title: string, abstract: string, journal: string, date: string): string {
-  return [
-    "请给这篇论文分级。",
-    "",
-    "分级标准：",
-    "- important：提出新理论/新方法，或与供应链、能源、平台经济、算法治理等主题高度相关，值得精读；",
-    "- watch：主题相关但创新有限，或方法可借鉴，值得收藏；",
-    "- skip：与研究方向无关、纯综述广告、征稿启事、会议通知等。",
-    "",
-    "返回格式：{\"level\":\"important|watch|skip\",\"score\":1-5,\"reason\":\"不超过40字的中文理由\",\"topic\":\"主题关键词\"}",
-    "",
-    `标题：${title}`,
-    `期刊：${journal}`,
-    `日期：${date}`,
-    `摘要：${abstract.slice(0, 2500)}`,
-  ].join("\n");
+export function levelTag(level: Level): string {
+  if (level === "important") return getTextSetting("tagImportant") || "RSS/重要";
+  if (level === "watch") return getTextSetting("tagWatch") || "RSS/关注";
+  return getTextSetting("tagSkip") || "RSS/略过";
 }
 
-type ItemLike = {
+export function levelTags(): string[] {
+  return LEVEL_KEYS.map((level) => levelTag(level));
+}
+
+export type ItemLike = {
   id?: number;
   libraryID: number;
   getField(field: string): unknown;
@@ -45,6 +39,72 @@ type ItemLike = {
   removeTag(tag: string): void;
   saveTx?(): Promise<unknown>;
 };
+
+export type ScreenContext = { tagHints: string[] };
+
+const tagCache = new Map<number, string[]>();
+
+/** 取库内使用频次最高的标签，作为模型推荐标签的候选，避免它自己造词。 */
+export async function fetchLibraryTags(libraryID: number, limit = 40): Promise<string[]> {
+  const cached = tagCache.get(libraryID);
+  if (cached) return cached;
+  const db = (Zotero as unknown as { DB?: { queryAsync(sql: string, params: unknown[]): Promise<unknown[]> } }).DB;
+  if (!db?.queryAsync) return [];
+  try {
+    const rows = (await db.queryAsync(
+      "SELECT t.name AS name, COUNT(it.itemID) AS n FROM itemTags it JOIN tags t USING(tagID) " +
+        "WHERE t.libraryID = ? GROUP BY t.name ORDER BY n DESC LIMIT ?",
+      [libraryID, limit],
+    )) as Array<{ name?: unknown }>;
+    const names = rows.map((row) => String(row?.name ?? "")).filter(Boolean);
+    tagCache.set(libraryID, names);
+    return names;
+  } catch (error) {
+    Zotero.debug(`[rss-helper] failed to read library tags: ${String(error)}`);
+    return [];
+  }
+}
+
+function buildSystemPrompt(): string {
+  const custom = getTextSetting("customPrompt");
+  return [
+    "你是科研文献筛选助手，替研究者从 RSS 推送里挑出真正值得读的论文。",
+    "",
+    "研究者的领域与偏好（这段由用户自定义，优先级最高）：",
+    custom,
+    "",
+    "分级：",
+    "- important：方法与问题都切中偏好，或提出新理论/新方法，值得精读并跟进；",
+    "- watch：主题相关但创新有限，或方法可借鉴，值得收藏备查；",
+    "- skip：与偏好无关、纯综述/征稿/会议通知/书评/新闻稿，或信息不足以判断。",
+    "",
+    "如果标题和摘要不足以判断，可以先调用 get_item_details 获取条目完整信息；",
+    "如果需要推荐标签，可以调用 get_library_tags 获取库内常用标签。不要为了凑数调用工具。",
+    "",
+    '只返回一个 JSON 对象，不要输出其他文本：{"level":"important|watch|skip","score":1-5,"reason":"不超过40字的中文理由","topic":"主题关键词","suggestedTag":"可选，必须是库内常用标签之一"}',
+  ].join("\n");
+}
+
+function buildUserPrompt(item: ItemLike, context?: ScreenContext): string {
+  const title = String(item.getField("title") ?? "").trim();
+  const abstract = String(item.getField("abstractNote") ?? "");
+  const journal = String(item.getField("publicationTitle") ?? "");
+  const date = String(item.getField("date") ?? "");
+  const doi = String(item.getField("DOI") ?? "");
+  const lines = [
+    "请给这篇论文分级。",
+    "",
+    `标题：${title}`,
+    `期刊：${journal}`,
+    `日期：${date}`,
+    doi ? `DOI：${doi}` : "",
+    `摘要：${abstract ? abstract.slice(0, 2500) : "（RSS 未提供摘要，可以调用 get_item_details 获取）"}`,
+  ].filter(Boolean);
+  if (getSetting("useLibraryTags") && context?.tagHints?.length) {
+    lines.push("", "库内常用标签（suggestedTag 只能从这里选，没有合适的不填）：", context.tagHints.join("、"));
+  }
+  return lines.join("\n");
+}
 
 function normalizeLevel(value: unknown): Level | null {
   const text = String(value ?? "").toLowerCase();
@@ -54,62 +114,143 @@ function normalizeLevel(value: unknown): Level | null {
   return null;
 }
 
-async function applyLevel(item: ItemLike, level: Level): Promise<void> {
-  for (const key of LEVEL_KEYS) {
-    const tag = LEVELS[key].tag;
-    if (key !== level) item.removeTag(tag);
-  }
-  item.addTag(LEVELS[level].tag);
-  await item.saveTx?.();
+async function colorize(libraryID: number, tag: string, color: string): Promise<void> {
   try {
     await (Zotero.Tags as unknown as { setColor(libraryID: number, name: string, color: string): Promise<unknown> }).setColor(
-      item.libraryID,
-      LEVELS[level].tag,
-      LEVELS[level].color,
+      libraryID,
+      tag,
+      color,
     );
   } catch (error) {
-    Zotero.debug(`[rss-helper] failed to color tag ${LEVELS[level].tag}: ${String(error)}`);
+    Zotero.debug(`[rss-helper] failed to color tag ${tag}: ${String(error)}`);
   }
 }
 
+async function applyLevel(item: ItemLike, level: Level, suggestedTag?: string): Promise<void> {
+  const chosen = levelTag(level);
+  for (const key of LEVEL_KEYS) {
+    if (key !== level) item.removeTag(levelTag(key));
+  }
+  item.addTag(chosen);
+  if (suggestedTag && getSetting("useLibraryTags") && suggestedTag !== chosen) {
+    item.addTag(suggestedTag);
+  }
+  await item.saveTx?.();
+  await colorize(item.libraryID, chosen, LEVEL_COLORS[level]);
+}
+
+/** 略过且用户没要求标灰：清掉旧的 AI 标签，保持分类干净。 */
+async function applySkip(item: ItemLike): Promise<void> {
+  if (getSetting("markSkipped")) {
+    await applyLevel(item, "skip");
+    return;
+  }
+  for (const tag of levelTags()) item.removeTag(tag);
+  await item.saveTx?.();
+}
+
+function toolsFor(item: ItemLike, context: ScreenContext | undefined): ToolDefinition[] {
+  const tools: ToolDefinition[] = [
+    {
+      spec: {
+        name: "get_item_details",
+        description: "读取当前条目的完整信息：标题、摘要全文（最多4000字）、期刊、日期、DOI、Extra、已有标签。",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+      run: () => {
+        const live = (Zotero.Items.get?.(item.id as number) as any) ?? item;
+        const field = (name: string) => String(live.getField?.(name) ?? "");
+        const tags = (live.getTags?.() ?? []).map((tag: any) => (typeof tag === "string" ? tag : tag?.tag)).filter(Boolean);
+        return {
+          title: field("title"),
+          abstract: field("abstractNote").slice(0, 4000),
+          journal: field("publicationTitle"),
+          date: field("date"),
+          doi: field("DOI"),
+          extra: field("extra").slice(0, 2000),
+          tags,
+        };
+      },
+    },
+    {
+      spec: {
+        name: "get_library_tags",
+        description: "读取当前文献库中使用频次最高的标签，用于推荐已有标签。",
+        parameters: { type: "object", properties: { limit: { type: "integer", minimum: 10, maximum: 80 } } },
+      },
+      run: async (args) => ({ tags: await fetchLibraryTags(item.libraryID, Number(args.limit) || 40) }),
+    },
+  ];
+  if (!getSetting("useLibraryTags")) return tools.slice(0, 1);
+  return tools;
+}
+
 /** 判断单个条目，返回等级；失败抛错。 */
-export async function screenItem(item: ItemLike): Promise<Level> {
+export async function screenItem(item: ItemLike, context?: ScreenContext): Promise<Level> {
   const title = String(item.getField("title") ?? "").trim();
   if (!title) throw new Error("标题为空");
-  const abstract = String(item.getField("abstractNote") ?? "");
-  const journal = String(item.getField("publicationTitle") ?? "");
-  const date = String(item.getField("date") ?? "");
-  const answer = await chatJSON(SYSTEM_PROMPT, userPrompt(title, abstract, journal, date), 400);
+  const hints = context ?? (getSetting("useLibraryTags") ? { tagHints: await fetchLibraryTags(item.libraryID) } : { tagHints: [] });
+  const answer = await chatWithTools(buildSystemPrompt(), buildUserPrompt(item, hints), toolsFor(item, hints), 500, 2);
   const level = normalizeLevel(answer.level);
   if (!level) throw new Error(`模型返回无法识别：${JSON.stringify(answer).slice(0, 120)}`);
-  await applyLevel(item, level);
+  if (level === "skip") await applySkip(item);
+  else await applyLevel(item, level, typeof answer.suggestedTag === "string" ? answer.suggestedTag.trim() : undefined);
   Zotero.debug(`[rss-helper] screened item ${item.id}: ${level}`);
   return level;
 }
 
 export function clearAiTags(item: ItemLike): void {
-  for (const key of LEVEL_KEYS) item.removeTag(LEVELS[key].tag);
+  for (const tag of levelTags()) item.removeTag(tag);
 }
 
-/** 菜单/自动流程入口：一次弱提示汇报整体结果。 */
+/** 菜单入口：多选条目批量筛选，用同一个弱进度窗刷新进度。 */
 export async function screenItems(items: ItemLike[], source = "AI 筛选"): Promise<void> {
-  if (!(await hasApiKey())) {
-    toast.show("请先在设置页保存 API Key", "cross");
+  if (!items.length) return;
+  const profile = await getLlmProfile();
+  if (!profile) {
+    toast.show("请先在设置页保存 API Key，或配置 Zotero GPT", "cross");
     return;
   }
-  if (!items.length) return;
-  toast.show(`${source}中…`, "feed-updating");
+  const tagHints = getSetting("useLibraryTags") ? await fetchLibraryTags(items[0].libraryID) : [];
   const counts: Record<Level, number> = { important: 0, watch: 0, skip: 0 };
   let failed = 0;
+  enrichmentProgress.begin(`RSS Helper · ${source}`, "筛选");
   for (const item of items) {
+    const id = item.id ?? 0;
+    if (id) enrichmentProgress.start(id, String(item.getField("title") ?? "未命名条目"));
     try {
-      counts[await screenItem(item)] += 1;
+      counts[await screenItem(item, { tagHints })] += 1;
+      if (id) enrichmentProgress.succeed(id);
     } catch (error) {
       failed += 1;
+      if (id) enrichmentProgress.fail(id);
       Zotero.debug(`[rss-helper] screen failed for item ${item.id}: ${String(error)}`);
     }
   }
   const parts = [`重要 ${counts.important}`, `关注 ${counts.watch}`, `略过 ${counts.skip}`];
   if (failed) parts.push(`失败 ${failed}`);
-  toast.show(parts.join(" · "), failed ? "cross" : "tick");
+  enrichmentProgress.summarize(parts.join(" · "));
+}
+
+type CollectionLike = {
+  name?: string;
+  loadAllData?(): Promise<unknown>;
+  getChildItems?(asIDs?: boolean, includeTrashed?: boolean): unknown[];
+};
+
+/** 分类右键入口：筛一个期刊/专题下的全部条目。 */
+export async function screenCollection(collection: CollectionLike, source = "AI 筛选分类"): Promise<void> {
+  try {
+    await collection.loadAllData?.();
+  } catch (error) {
+    Zotero.debug(`[rss-helper] failed to load collection items: ${String(error)}`);
+  }
+  const raw = (collection.getChildItems?.(false, false) ?? []) as ItemLike[];
+  const items = raw.filter((item) => item && typeof item.getField === "function");
+  if (!items.length) {
+    toast.show("这个分类里没有可筛选的条目", "cross");
+    return;
+  }
+  const label = collection.name ? `${source}：${collection.name}` : source;
+  await screenItems(items, label);
 }

@@ -1,4 +1,4 @@
-import { hasApiKey, saveApiKey } from "./llm";
+import { getLlmProfile, saveApiKey } from "./llm";
 import { ensureDefaults } from "./settings";
 
 export const PLUGIN_ID = "zotero-rss-helper@github.com";
@@ -25,7 +25,15 @@ function resolveDocument(target: unknown): PrefsDocument | undefined {
 async function refreshKeyStatus(doc: PrefsDocument): Promise<void> {
   const status = doc.getElementById("rss-helper-apiKey-status") as unknown as ElementLike | null;
   if (!status) return;
-  status.textContent = (await hasApiKey()) ? "已保存（系统钥匙串加密）" : "未保存";
+  status.textContent = await describeProfile();
+}
+
+/** 设置页的状态文案：优先说明是否复用了 Zotero GPT 的配置。 */
+async function describeProfile(): Promise<string> {
+  const profile = await getLlmProfile();
+  if (!profile) return "未保存";
+  if (profile.source === "zoterogpt") return `未保存；将使用 Zotero GPT 的配置（${profile.model}）`;
+  return "已保存（系统钥匙串加密）";
 }
 
 /**
@@ -53,7 +61,7 @@ export async function onPrefsCommand(target: unknown): Promise<void> {
   if (status) status.textContent = "保存中…";
   const ok = await saveApiKey(value);
   if (input) input.value = "";
-  if (status) status.textContent = ok ? (value.trim() ? "已保存（系统钥匙串加密）" : "已清除") : "保存失败：系统钥匙串不可用";
+  if (status) status.textContent = ok ? (value.trim() ? "已保存（系统钥匙串加密）" : await describeProfile()) : "保存失败：系统钥匙串不可用";
 }
 
 /**

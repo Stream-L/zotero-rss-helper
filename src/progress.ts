@@ -35,11 +35,32 @@ class EnrichmentProgress {
   private idleTimer: any = null;
   private readonly pending = new Set<number>();
   private readonly titles = new Map<number, string>();
+  private headline = HEADLINE;
+  private verb = "补全";
+  private summary: string | null = null;
   private total = 0;
   private succeeded = 0;
   private skipped = 0;
   private failed = 0;
   private finished = false;
+
+  /** 开始一批新任务：换标题与动词，计数从零开始。 */
+  begin(headline: string, verb = "补全"): void {
+    this.reset();
+    this.headline = headline;
+    this.verb = verb;
+  }
+
+  /** 全部完成后用自定义汇总替换默认文案（例如 AI 筛选的分级计数）。 */
+  summarize(text: string): void {
+    this.summary = text;
+    if (!this.win) return;
+    if (!this.finished) {
+      if (this.pending.size === 0) this.finish();
+      return;
+    }
+    this.paint("success", text);
+  }
 
   start(id: number, title: string): void {
     if (this.pending.has(id)) return;
@@ -51,7 +72,7 @@ class EnrichmentProgress {
     this.cancelIdleClose();
     this.finished = false;
     this.updateHeadline();
-    this.paint("pending", `补全中：${this.titles.get(id)}`);
+    this.paint("pending", `${this.verb}中：${this.titles.get(id)}`);
   }
 
   succeed(id: number): void {
@@ -86,7 +107,7 @@ class EnrichmentProgress {
     if (this.total === 0) return;
     if (this.pending.size > 0) {
       const latest = Array.from(this.titles.values()).pop();
-      if (latest) this.paint("pending", `补全中：${latest}`);
+      if (latest) this.paint("pending", `${this.verb}中：${latest}`);
       return;
     }
     this.finish();
@@ -96,15 +117,15 @@ class EnrichmentProgress {
     if (this.finished) return;
     this.finished = true;
     try {
-      this.win?.changeHeadline(HEADLINE, "feed", `${this.total}/${this.total}`);
+      this.win?.changeHeadline(this.headline, "feed", `${this.total}/${this.total}`);
     } catch (error) {
       Zotero.debug(`[rss-helper] progress headline update failed: ${String(error)}`);
     }
-    const parts = [`${this.succeeded} 项已补全`];
+    const parts = [`${this.succeeded} 项已${this.verb}`];
     if (this.skipped > 0) parts.push(`${this.skipped} 项未匹配`);
     if (this.failed > 0) parts.push(`${this.failed} 项失败`);
     const state: EnrichState = this.succeeded === 0 && this.failed > 0 ? "failed" : "success";
-    this.paint(state, parts.join(" · "));
+    this.paint(state, this.summary ?? parts.join(" · "));
     this.scheduleIdleClose();
   }
 
@@ -112,7 +133,7 @@ class EnrichmentProgress {
     if (!this.win) return;
     const done = this.succeeded + this.skipped + this.failed;
     try {
-      this.win.changeHeadline(HEADLINE, "feed", `${done}/${this.total}`);
+      this.win.changeHeadline(this.headline, "feed", `${done}/${this.total}`);
     } catch (error) {
       Zotero.debug(`[rss-helper] progress headline update failed: ${String(error)}`);
     }
@@ -131,8 +152,8 @@ class EnrichmentProgress {
     if (typeof ProgressWindow !== "function") return null;
     try {
       this.win = new ProgressWindow({ closeOnClick: true });
-      this.win.changeHeadline(HEADLINE, "feed", `0/${this.total}`);
-      this.line = new this.win.ItemProgress("", "准备补全…");
+      this.win.changeHeadline(this.headline, "feed", `0/${this.total}`);
+      this.line = new this.win.ItemProgress("", `准备${this.verb}…`);
       this.win.show();
       return this.win;
     } catch (error) {
@@ -187,6 +208,9 @@ class EnrichmentProgress {
     this.line = null;
     this.pending.clear();
     this.titles.clear();
+    this.headline = HEADLINE;
+    this.verb = "补全";
+    this.summary = null;
     this.total = 0;
     this.succeeded = 0;
     this.skipped = 0;
