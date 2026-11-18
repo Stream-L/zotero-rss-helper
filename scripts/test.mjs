@@ -174,19 +174,16 @@ unregisterItemHook();
 // 任务2：设置项走 extensions.rss-helper.* 分支，首次启动补默认值，设置页用完整键名双向绑定。
 const { getSetting, setSetting, ensureDefaults, SETTING_KEYS, TEXT_SETTING_KEYS, FULL_PREF_PREFIX, getTagHintCount } = await import("../build/src/settings.js");
 assert.equal(getSetting("autoEnrich"), true, "missing pref must fall back to the default");
-assert.equal(getSetting("fetchAttachments"), false);
+assert.equal(getSetting("autoTranslate"), false);
 assert.equal(getTagHintCount(), 40, "tag hint count must default to 40");
 prefs.set("extensions.rss-helper.tagHintCount", "7");
 assert.equal(getTagHintCount(), 7);
 prefs.set("extensions.rss-helper.tagHintCount", "999");
 assert.equal(getTagHintCount(), 120, "tag hint count must be clamped");
 prefs.delete("extensions.rss-helper.tagHintCount");
-setSetting("fetchAttachments", true);
-assert.equal(prefs.get("extensions.rss-helper.fetchAttachments"), true);
-prefs.delete("extensions.rss-helper.fetchAttachments");
 ensureDefaults();
 assert.equal(prefs.get("extensions.rss-helper.autoEnrich"), true);
-assert.equal(prefs.get("extensions.rss-helper.fetchAttachments"), false);
+assert.equal(prefs.get("extensions.rss-helper.fetchAttachments"), undefined, "PDF auto-download setting must be gone");
 
 const paneMarkup = readFileSync(new URL("../content/preferences.xhtml", import.meta.url), "utf8");
 for (const key of [...SETTING_KEYS, ...TEXT_SETTING_KEYS]) {
@@ -358,6 +355,9 @@ const { onPrefsPreviewTags } = await import("../build/src/prefs-pane.js");
 prefs.set("extensions.rss-helper.tagHintCount", "6");
 await onPrefsPreviewTags({ getElementById: (id) => (id === "rss-helper-tag-preview" ? preview : null) });
 assert.equal(dbQueries.at(-1).params[1], 6, "preview must use the configured tag count");
+assert.match(dbQueries.at(-1).sql, /JOIN items i ON i\.itemID = it\.itemID/, "tags have no libraryID column; must join items");
+assert.match(dbQueries.at(-1).sql, /NOT LIKE '\/%'/, "internal tags like /unread must be filtered out");
+assert.equal(dbQueries.at(-1).params[0], 1, "tag hints must come from the user library");
 assert.match(preview.textContent, /供应链管理\(12\)/);
 assert.match(preview.textContent, /前 2 个/);
 prefs.delete("extensions.rss-helper.tagHintCount");

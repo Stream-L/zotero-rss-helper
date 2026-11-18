@@ -46,25 +46,24 @@ When an RSS item is added or changed, the plugin:
 7. Open the gear menu, choose **Install Add-on From File...**, and select the XPI.
 8. Restart Zotero if prompted.
 
-安装后，插件会自动处理新增或修改的 RSS 条目，不需要 API key 或账号。批量补全时，右下角只保留一个进度提示窗，标题栏显示完成数量，全部结束后自动关闭。
+安装后，插件会自动处理新入库的 RSS 条目，不需要 API key 或账号。批量补全时，右下角只保留一个进度提示窗，标题栏显示完成数量，全部结束后自动关闭。
 
-After installation, the plugin works automatically for new and modified RSS items. No API key or account is required. A batch shares a single progress window in the lower-right corner; the headline counts finished items and the window closes itself when the batch is done.
+After installation, the plugin works automatically for newly added RSS items. No API key or account is required. A batch shares a single progress window in the lower-right corner; the headline counts finished items and the window closes itself when the batch is done.
 
 ## 设置 | Settings
 
 **工具 > 设置 > RSS Helper**：
 
-- **自动补全 RSS 条目元数据**：关闭后新条目只保留 RSS 原始数据（默认开启）；
-- **补全成功后尝试下载可用的 PDF**：通过 DOI、URL、开放获取渠道查找附件（默认关闭）；
+- **自动补全 RSS 条目元数据**：只处理新入库的 RSS 条目；点击条目、转存文库不会再触发重查，已有 DOI、摘要、期刊的条目直接跳过（默认开启）；插件不自动下载 PDF，需要全文请用 Zotero 自带的「查找可用 PDF」；
 - **补全元数据后自动翻译标题和摘要**：复用本机 Translate for Zotero 插件，译文写进 Extra 的 `titleTranslation` / `abstractTranslation`（默认关闭）；
 - **补全元数据后自动判断重要性**：调用大模型给条目分级并打彩色标签（默认关闭）；
 - **我的研究领域与偏好**：一段自然语言，写清方向、方法偏好、不想要的内容；原样进入提示词，可以同时写多个领域；
 - **重要 / 关注 / 略过标签名**：默认 `RSS/重要`、`RSS/关注`、`RSS/略过`，可改成自己习惯的命名；
 - **给「略过」也打灰色标签**：默认关闭，略过的条目不打标签；
 - **把库内常用标签作为研究领域的线索**：把使用频次最高的若干标签写进提示词，帮助模型判断你的方向；「提取标签数量」控制取前几个（默认 40，范围 5–120），改完点「预览库内标签」就能先看清这批标签和条目数，再点「从库内标签归纳领域」让模型总结成领域描述（默认开启）；
-- **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务。API Key 留空时自动读取本机 **Zotero GPT** 插件（`zoterogpt@polygon.org`）保存的 `extensions.zotero.zoterogpt.*`；自己填的 Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。
+- **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务。API Key 留空时自动读取本机 **Zotero GPT** 插件（`zoterogpt@polygon.org`）保存的 `extensions.zotero.zoterogpt.*`；自己填的 Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。模型不支持 `tools` 或 `response_format` 时自动降级重试；失败摘要会直接显示在进度窗，完整错误写到数据目录的 `rss-helper.log`。
 
-Settings cover auto-enrichment, optional PDF lookup, auto-translation through Translate for Zotero, and AI screening. Tag hints are configurable in count and can be previewed before use; the "generate domain prompt" button turns them into a research-area description. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store.
+Settings cover auto-enrichment, auto-translation through Translate for Zotero, and AI screening. Enrichment only runs for newly added feed items and skips items that already have a DOI, abstract, and journal, so clicking or filing an item does not re-query Crossref; the plugin does not download PDFs itself. Tag hints are configurable in count and can be previewed before use; the "generate domain prompt" button turns them into a research-area description. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store. Unsupported `tools`/`response_format` requests fall back automatically, and full errors go to `rss-helper.log` in the data directory.
 
 ## AI 筛选 | AI screening
 

@@ -4,6 +4,7 @@
  * 2. 本机 Zotero GPT 插件（zoterogpt@polygon.org）保存的 key / 接口 / 模型。
  * 这样用户只要装了 Zotero GPT，就不用再填一遍。
  */
+import { logEvent } from "./log";
 import { API_KEY_PREF, getAbsolutePref, getRawPref, getTextSetting, setRawPref } from "./settings";
 
 type ChatMessage = {
@@ -152,22 +153,31 @@ export async function getLlmProfile(): Promise<LlmProfile | null> {
 }
 
 async function postChat(profile: LlmProfile, body: Record<string, unknown>): Promise<{ content: string; toolCalls: unknown[] }> {
-  const xhr = (await Zotero.HTTP.request("POST", chatEndpoint(profile.baseUrl), {
-    body: JSON.stringify({ model: profile.model, temperature: profile.temperature, ...body }),
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${profile.apiKey}`,
-    },
-    responseType: "json",
-    timeout: 60000,
-  } as any)) as unknown as { response?: unknown; status?: number };
+  let xhr: { response?: unknown; status?: number };
+  try {
+    xhr = (await Zotero.HTTP.request("POST", chatEndpoint(profile.baseUrl), {
+      body: JSON.stringify({ model: profile.model, temperature: profile.temperature, ...body }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${profile.apiKey}`,
+      },
+      responseType: "json",
+      timeout: 60000,
+    } as any)) as unknown as { response?: unknown; status?: number };
+  } catch (error) {
+    // UnexpectedStatusException 的 message 里已经带了响应体；网络错误则只有原因。
+    logEvent("AI", `request failed: ${String(error)}`);
+    throw new Error(`AI 请求失败：${String(error).slice(0, 300)}`);
+  }
 
   const data = (typeof xhr.response === "string" ? JSON.parse(xhr.response) : xhr.response) as ChatResponse | undefined;
   const message = data?.choices?.[0]?.message;
   const content = typeof message?.content === "string" ? message.content : "";
   const toolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
   if (!content.trim() && !toolCalls.length) {
-    throw new Error(`模型返回为空（HTTP ${xhr.status ?? "?"}）`);
+    const bodyText = JSON.stringify(data ?? {}).slice(0, 300);
+    logEvent("AI", `empty response (HTTP ${xhr.status ?? "?"}): ${bodyText}`);
+    throw new Error(`模型返回为空（HTTP ${xhr.status ?? "?"}）：${bodyText}`);
   }
   return { content, toolCalls };
 }
@@ -188,19 +198,29 @@ function parseJsonObject(content: string): Record<string, unknown> {
   }
 }
 
-/** 纯 JSON 调用，不带工具。 */
+/** 纯 JSON 调用，不带工具。response_format 不被支持时自动降级重试一次。 */
 export async function chatJSON(system: string, user: string, maxTokens = 512): Promise<Record<string, unknown>> {
   const profile = await resolveLlmProfile();
   if (!profile) throw new Error("未配置 AI 接口");
-  const { content } = await postChat(profile, {
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ],
-    max_tokens: Math.min(maxTokens, profile.maxTokens),
-    response_format: { type: "json_object" },
-  });
-  return parseJsonObject(content);
+  const messages = [
+    { role: "system" as const, content: system },
+    { role: "user" as const, content: user },
+  ];
+  try {
+    const { content } = await postChat(profile, {
+      messages,
+      max_tokens: Math.min(maxTokens, profile.maxTokens),
+      response_format: { type: "json_object" },
+    });
+    return parseJsonObject(content);
+  } catch (error) {
+    logEvent("AI", `json_object request failed, retrying without response_format: ${String(error)}`);
+    const { content } = await postChat(profile, {
+      messages,
+      max_tokens: Math.min(maxTokens, profile.maxTokens),
+    });
+    return parseJsonObject(content);
+  }
 }
 
 /**
@@ -216,6 +236,24 @@ export async function chatWithTools(
 ): Promise<Record<string, unknown>> {
   const profile = await resolveLlmProfile();
   if (!profile) throw new Error("未配置 AI 接口");
+  try {
+    return await chatWithToolsOnce(profile, system, user, tools, maxTokens, maxRounds);
+  } catch (error) {
+    // 有些模型/网关不支持 tools 或 tool_choice，整轮失败会让每个条目都失败；
+    // 这里退回不带工具的纯 JSON 调用，至少先能筛出结果。
+    logEvent("AI", `tool call failed, falling back to plain JSON: ${String(error)}`);
+    return await chatJSON(system, user, maxTokens);
+  }
+}
+
+async function chatWithToolsOnce(
+  profile: LlmProfile,
+  system: string,
+  user: string,
+  tools: ToolDefinition[],
+  maxTokens: number,
+  maxRounds: number,
+): Promise<Record<string, unknown>> {
   const messages: ChatMessage[] = [
     { role: "system", content: system },
     { role: "user", content: user },

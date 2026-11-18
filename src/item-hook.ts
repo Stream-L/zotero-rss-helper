@@ -1,4 +1,5 @@
 import { lookupCrossref, lookupCrossrefByBibliographic, lookupOpenAlexAbstract, type CrossrefClient, type EnrichedMetadata } from "./crossref";
+import { logEvent } from "./log";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
 import { screenItem } from "./screen";
@@ -38,12 +39,22 @@ function isFeedItem(item: ZoteroItemLike): boolean {
   return item.itemTypeID === undefined;
 }
 
+/** 已经有 DOI + 摘要 + 期刊的条目视为补全过，不再重复请求 Crossref，也不弹提示。 */
+function isMetadataComplete(item: ZoteroItemLike): boolean {
+  const get = (field: string) => String(item.getField?.(field) ?? "").trim();
+  return Boolean(get("DOI") && get("abstractNote") && get("publicationTitle"));
+}
+
 export async function enrichItem(item: ZoteroItemLike): Promise<void> {
   if (!item.id || pending.has(item.id)) return;
   if (!isFeedItem(item)) return;
   const fingerprint = itemFingerprint(item);
   if (processed.get(item.id) === fingerprint) return;
   const id = item.id;
+  if (isMetadataComplete(item)) {
+    processed.set(id, fingerprint);
+    return;
+  }
   pending.add(id);
   enrichmentProgress.start(id, String(item.getField?.("title") ?? item.title ?? ""));
   try {
@@ -59,25 +70,18 @@ export async function enrichItem(item: ZoteroItemLike): Promise<void> {
     let abstractFound = Boolean(metadata.abstractNote);
     if (!metadata.abstractNote) {
       try { metadata.abstractNote = await lookupOpenAlexAbstract(client, metadata.DOI); abstractFound = Boolean(metadata.abstractNote); }
-      catch (error) { Zotero.debug(`[rss-helper] OpenAlex abstract lookup failed: ${String(error)}`); }
+      catch (error) { logEvent("enrich", `OpenAlex abstract lookup failed for item ${id}: ${String(error)}`); }
     }
     const fieldCount = applyMetadata(item, metadata);
     await item.saveTx?.();
-    if (getSetting("fetchAttachments")) {
-      try {
-        await (Zotero.Attachments as any).addAvailablePDF(item, { methods: ["doi", "url", "oa"] });
-      } catch (error) {
-        Zotero.debug(`[rss-helper] PDF lookup failed for item ${id}: ${String(error)}`);
-      }
-    }
     processed.set(id, itemFingerprint(item));
     enrichmentProgress.succeed(id);
-    Zotero.debug(`[rss-helper] enriched ${fieldCount}/7 fields${abstractFound ? "" : " (abstract unavailable)"}`);
+    logEvent("enrich", `item ${id}: enriched ${fieldCount}/7 fields${abstractFound ? "" : " (abstract unavailable)"}`);
     scheduleFollowUps(item);
   } catch (error) {
     processed.set(id, itemFingerprint(item));
     enrichmentProgress.fail(id);
-    Zotero.debug(`[rss-helper] enrichment failure: ${String(error)}`);
+    logEvent("enrich", `item ${id} failed: ${String(error)}`);
   } finally { pending.delete(id); }
 }
 
@@ -96,7 +100,9 @@ function scheduleFollowUps(item: ZoteroItemLike): void {
 }
 
 const observer = { notify(event: string, type: string, ids: Array<number> | number): void {
-  if (type !== "item" || !["add", "modify"].includes(event)) return;
+  // 只处理新增：RSS 条目入库时补一次即可。点击条目、转存文库都会触发 modify，
+  // 再自动重查会重复请求 Crossref，也会让进度提示反复出现。
+  if (type !== "item" || event !== "add") return;
   if (!getSetting("autoEnrich")) return;
   for (const id of Array.isArray(ids) ? ids : [ids]) {
     const item = Zotero.Items.get(id) as unknown as ZoteroItemLike | undefined;

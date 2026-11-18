@@ -6,6 +6,7 @@
  * - 标签名可在设置页改，颜色由 Zotero.Tags.setColor 设置。
  */
 import { chatWithTools, getLlmProfile, type ToolDefinition } from "./llm";
+import { logEvent } from "./log";
 import { enrichmentProgress } from "./progress";
 import { getSetting, getTagHintCount, getTextSetting } from "./settings";
 import { toast } from "./toast";
@@ -47,6 +48,13 @@ export type TagStat = { name: string; count: number };
 
 const tagCache = new Map<number, TagStat[]>();
 
+let lastTagError: string | null = null;
+
+/** 最近一次读取库内标签的错误；设置页预览为空时用来区分「读取失败」和「还没有标签」。 */
+export function getLastTagError(): string | null {
+  return lastTagError;
+}
+
 /**
  * 取库内使用频次最高的标签。用途是让模型据此推断用户的研究领域（写进系统提示词），
  * 而不是把标签原样丢回去当筛选结果。
@@ -59,22 +67,35 @@ export async function fetchLibraryTagStats(
   const cached = refresh ? undefined : tagCache.get(libraryID);
   if (cached) return cached;
   const db = (Zotero as unknown as { DB?: { queryAsync(sql: string, params: unknown[]): Promise<unknown[]> } }).DB;
-  if (!db?.queryAsync) return [];
+  if (!db?.queryAsync) {
+    lastTagError = "Zotero.DB 不可用";
+    return [];
+  }
   try {
+    // 注：tags 表没有 libraryID 列（Zotero 的标签按条目关联），库归属要 join items 判断。
+    // 以 "/" 开头的是 Zotero 的内部标签（如 /unread），不作为研究领域线索。
     const rows = (await db.queryAsync(
-      "SELECT t.name AS name, COUNT(it.itemID) AS n FROM itemTags it JOIN tags t USING(tagID) " +
-        "WHERE t.libraryID = ? GROUP BY t.name ORDER BY n DESC LIMIT ?",
+      "SELECT t.name AS name, COUNT(DISTINCT it.itemID) AS n " +
+        "FROM itemTags it JOIN tags t ON t.tagID = it.tagID JOIN items i ON i.itemID = it.itemID " +
+        "WHERE i.libraryID = ? AND t.name NOT LIKE '/%' GROUP BY t.name ORDER BY n DESC LIMIT ?",
       [libraryID, limit],
     )) as Array<{ name?: unknown; n?: unknown }>;
     const stats = rows
       .map((row) => ({ name: String(row?.name ?? "").trim(), count: Number(row?.n) || 0 }))
       .filter((stat) => stat.name);
+    lastTagError = null;
     tagCache.set(libraryID, stats);
     return stats;
   } catch (error) {
-    Zotero.debug(`[rss-helper] failed to read library tags: ${String(error)}`);
+    lastTagError = String(error);
+    logEvent("tags", `failed to read library ${libraryID} tags: ${String(error)}`);
     return [];
   }
+}
+
+/** 研究领域线索永远取「我的文库」的标签，而不是当前 RSS 订阅所在的库。 */
+export function tagHintLibraryID(): number {
+  return Number((Zotero as unknown as { Libraries?: { userLibraryID?: number } }).Libraries?.userLibraryID) || 1;
 }
 
 export async function fetchLibraryTags(libraryID: number, limit = getTagHintCount()): Promise<string[]> {
@@ -148,7 +169,7 @@ async function colorize(libraryID: number, tag: string, color: string): Promise<
       color,
     );
   } catch (error) {
-    Zotero.debug(`[rss-helper] failed to color tag ${tag}: ${String(error)}`);
+    logEvent("tags", `failed to color tag ${tag}: ${String(error)}`);
   }
 }
 
@@ -213,7 +234,7 @@ function toolsFor(item: ItemLike, context: ScreenContext | undefined): ToolDefin
         description: "读取当前文献库中使用频次最高的标签，用于推荐已有标签。",
         parameters: { type: "object", properties: { limit: { type: "integer", minimum: 10, maximum: 80 } } },
       },
-      run: async (args) => ({ tags: await fetchLibraryTags(item.libraryID, Number(args.limit) || getTagHintCount()) }),
+      run: async (args) => ({ tags: await fetchLibraryTags(tagHintLibraryID(), Number(args.limit) || getTagHintCount()) }),
     },
   ];
   if (!getSetting("useLibraryTags")) return tools.slice(0, 1);
@@ -224,7 +245,7 @@ function toolsFor(item: ItemLike, context: ScreenContext | undefined): ToolDefin
 export async function screenItem(item: ItemLike, context?: ScreenContext): Promise<Level> {
   const title = String(item.getField("title") ?? "").trim();
   if (!title) throw new Error("标题为空");
-  const hints = context ?? (getSetting("useLibraryTags") ? { tagHints: await fetchLibraryTags(item.libraryID) } : { tagHints: [] });
+  const hints = context ?? (getSetting("useLibraryTags") ? { tagHints: await fetchLibraryTags(tagHintLibraryID()) } : { tagHints: [] });
   const answer = await chatWithTools(
     buildSystemPrompt(hints.tagHints),
     buildUserPrompt(item, hints),
@@ -252,9 +273,10 @@ export async function screenItems(items: ItemLike[], source = "AI 筛选"): Prom
     toast.show("请先在设置页保存 API Key，或配置 Zotero GPT", "cross");
     return;
   }
-  const tagHints = getSetting("useLibraryTags") ? await fetchLibraryTags(items[0].libraryID) : [];
+  const tagHints = getSetting("useLibraryTags") ? await fetchLibraryTags(tagHintLibraryID()) : [];
   const counts: Record<Level, number> = { important: 0, watch: 0, skip: 0 };
   let failed = 0;
+  let firstError = "";
   enrichmentProgress.begin(`RSS Helper · ${source}`, "筛选");
   for (const item of items) {
     const id = item.id ?? 0;
@@ -264,13 +286,15 @@ export async function screenItems(items: ItemLike[], source = "AI 筛选"): Prom
       if (id) enrichmentProgress.succeed(id);
     } catch (error) {
       failed += 1;
+      if (!firstError) firstError = String(error);
       if (id) enrichmentProgress.fail(id);
-      Zotero.debug(`[rss-helper] screen failed for item ${item.id}: ${String(error)}`);
+      logEvent("AI", `screen failed for item ${item.id}: ${String(error)}`);
     }
   }
   const parts = [`重要 ${counts.important}`, `关注 ${counts.watch}`, `略过 ${counts.skip}`];
   if (failed) parts.push(`失败 ${failed}`);
-  enrichmentProgress.summarize(parts.join(" · "));
+  const summary = failed && firstError ? `${parts.join(" · ")}；首个错误：${firstError.slice(0, 160)}` : parts.join(" · ");
+  enrichmentProgress.summarize(summary, failed ? "failed" : "success");
 }
 
 type CollectionLike = {
@@ -284,7 +308,7 @@ export async function screenCollection(collection: CollectionLike, source = "AI 
   try {
     await collection.loadAllData?.();
   } catch (error) {
-    Zotero.debug(`[rss-helper] failed to load collection items: ${String(error)}`);
+    logEvent("AI", `failed to load collection items: ${String(error)}`);
   }
   const raw = (collection.getChildItems?.(false, false) ?? []) as ItemLike[];
   const items = raw.filter((item) => item && typeof item.getField === "function");
@@ -305,7 +329,7 @@ export async function screenFeed(libraryID: number, source = "AI 筛选 RSS 订�
       true,
     )) as unknown[];
   } catch (error) {
-    Zotero.debug(`[rss-helper] failed to load feed items: ${String(error)}`);
+    logEvent("AI", `failed to load feed items: ${String(error)}`);
   }
   const items = raw.filter((item): item is ItemLike => !!item && typeof (item as ItemLike).getField === "function");
   if (!items.length) {

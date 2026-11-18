@@ -1,5 +1,6 @@
 import { chatJSON, getLlmProfile, saveApiKey } from "./llm";
-import { fetchLibraryTagStats } from "./screen";
+import { logEvent } from "./log";
+import { fetchLibraryTagStats, getLastTagError, tagHintLibraryID } from "./screen";
 import { ensureDefaults, getTagHintCount, setTextSetting } from "./settings";
 
 export const PLUGIN_ID = "zotero-rss-helper@github.com";
@@ -82,11 +83,14 @@ export async function onPrefsGeneratePrompt(target: unknown): Promise<void> {
   const status = doc.getElementById("rss-helper-prompt-status") as unknown as ElementLike | null;
   const textarea = doc.getElementById("rss-helper-customPrompt") as unknown as ElementLike | null;
   if (status) status.textContent = "正在根据库内标签归纳…";
-  const libraries = (Zotero as unknown as { Libraries?: { userLibraryID?: number } }).Libraries;
-  const libraryID = Number(libraries?.userLibraryID ?? 1);
-  const stats = await fetchLibraryTagStats(libraryID, getTagHintCount(), true);
+  const stats = await fetchLibraryTagStats(tagHintLibraryID(), getTagHintCount(), true);
   if (!stats.length) {
-    if (status) status.textContent = "库里还没有标签：先给文献打一些主题标签，或手动填写上面的领域描述";
+    const reason = getLastTagError();
+    if (status) {
+      status.textContent = reason
+        ? `读取库内标签失败：${reason.slice(0, 120)}`
+        : "库里还没有标签：先给文献打一些主题标签，或手动填写上面的领域描述";
+    }
     return;
   }
   try {
@@ -101,8 +105,8 @@ export async function onPrefsGeneratePrompt(target: unknown): Promise<void> {
     if (textarea) textarea.value = profile;
     if (status) status.textContent = "已写入上面的领域描述，可继续手动修改";
   } catch (error) {
-    Zotero.debug(`[rss-helper] failed to generate domain prompt: ${String(error)}`);
-    if (status) status.textContent = `生成失败：${String(error).slice(0, 80)}`;
+    logEvent("prefs", `failed to generate domain prompt: ${String(error)}`);
+    if (status) status.textContent = `生成失败：${String(error).slice(0, 120)}`;
   }
 }
 
@@ -113,17 +117,19 @@ export async function onPrefsPreviewTags(target: unknown): Promise<void> {
   const doc = resolveDocument(target);
   if (!doc) return;
   const preview = doc.getElementById("rss-helper-tag-preview") as unknown as ElementLike | null;
-  const libraries = (Zotero as unknown as { Libraries?: { userLibraryID?: number } }).Libraries;
-  const libraryID = Number(libraries?.userLibraryID ?? 1);
   const limit = getTagHintCount();
   if (preview) preview.textContent = `正在读取库内使用最多的前 ${limit} 个标签…`;
-  const stats = await fetchLibraryTagStats(libraryID, limit, true);
+  const stats = await fetchLibraryTagStats(tagHintLibraryID(), limit, true);
   if (!preview) return;
   if (!stats.length) {
-    preview.textContent = "库里还没有标签：先给文献打一些主题标签，再回来预览。";
+    const reason = getLastTagError();
+    preview.textContent = reason
+      ? `读取失败：${reason.slice(0, 160)}（详见数据目录 rss-helper.log）`
+      : "我的文库还没有标签：先给文献打一些主题标签，再回来预览。";
     return;
   }
-  preview.textContent = `当前取前 ${stats.length} 个（标签名(条目数)）：${stats
+  const total = stats.reduce((sum, stat) => sum + stat.count, 0);
+  preview.textContent = `从「我的文库」取前 ${stats.length} 个（合计 ${total} 次，标签名(条目数)）：${stats
     .map((stat) => `${stat.name}(${stat.count})`)
     .join("、")}`;
 }

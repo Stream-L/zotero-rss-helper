@@ -5,7 +5,6 @@
  */
 export const SETTINGS = {
   autoEnrich: true,
-  fetchAttachments: false,
   autoTranslate: false,
   autoScreen: false,
   markSkipped: false,
