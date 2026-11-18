@@ -63,7 +63,7 @@ export async function onPrefsCommand(target: unknown): Promise<void> {
   if (status) status.textContent = "保存中…";
   const ok = await saveApiKey(value);
   if (input) input.value = "";
-  if (status) status.textContent = ok ? (value.trim() ? "已保存（系统钥匙串加密）" : await describeProfile()) : "保存失败：系统钥匙串不可用";
+  if (status) status.textContent = ok ? (value.trim() ? "已保存（系统钥匙串加密）" : await describeProfile()) : "保存失败：Key 含中文/全角字符，或系统钥匙串不可用（详见 rss-helper.log）";
 }
 
 /** 让模型根据文献库里常用的主题标签，归纳出用户的研究领域，直接写进自定义提示词。 */

@@ -37,12 +37,32 @@ const ZOTEROGPT_API = "extensions.zotero.zoterogpt.api";
 const ZOTEROGPT_MODEL = "extensions.zotero.zoterogpt.model";
 const ZOTEROGPT_SETTINGS = "extensions.zotero.zoterogpt.settings";
 
+/**
+ * HTTP 头只能携带 Latin-1 字符。Key 里混进中文、全角符号或从网页复制来的零宽字符时，
+ * Zotero 的 Headers.append 会直接抛 ByteString 错误，看起来像「网络失败」，实际是 Key 坏了。
+ * 这里只返回位置，不返回字符本身，避免把 Key 写进日志。
+ */
+export function keyProblem(value: string): string | null {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code > 255) {
+      return `第 ${index + 1} 个字符（U+${code.toString(16).toUpperCase()}）`;
+    }
+  }
+  return null;
+}
+
 /** API Key 用系统钥匙串加密后存 prefs，不在 profile 里留明文。 */
 export async function saveApiKey(key: string): Promise<boolean> {
   const trimmed = key.trim();
   if (!trimmed) {
     setRawPref(API_KEY_PREF, "");
     return true;
+  }
+  const problem = keyProblem(trimmed);
+  if (problem) {
+    logEvent("AI", `refused to save API key: non-ASCII character at ${problem}`);
+    return false;
   }
   const keyStore = (Zotero as unknown as { OSKeyStore?: { encrypt?: (value: string) => Promise<string> } }).OSKeyStore;
   if (!keyStore?.encrypt) {
@@ -124,8 +144,9 @@ export function chatEndpoint(baseUrl: string): string {
 
 async function resolveLlmProfile(): Promise<LlmProfile | null> {
   const ownKey = await loadApiKey();
-  if (ownKey) {
-    logEvent("AI", "using API key saved by RSS Helper");
+  const ownKeyProblem = ownKey ? keyProblem(ownKey) : null;
+  if (ownKey && !ownKeyProblem) {
+    logEvent("AI", `using API key saved by RSS Helper (length ${ownKey.length})`);
     return {
       baseUrl: getTextSetting("llmBaseUrl"),
       model: getTextSetting("llmModel"),
@@ -135,7 +156,10 @@ async function resolveLlmProfile(): Promise<LlmProfile | null> {
       source: "rss-helper",
     };
   }
-
+  if (ownKey && ownKeyProblem) {
+    // 坏 Key 不能当成网络错误：跳过它，继续尝试 Zotero GPT 的配置。
+    logEvent("AI", `saved RSS Helper key ignored: non-ASCII character at ${ownKeyProblem}; falling back to Zotero GPT`);
+  }
   const entry = readZoteroGptEntry();
   const prefKey = getAbsolutePref(ZOTEROGPT_SECRET);
   const rawKey = String(prefKey ?? entry?.secretKey ?? "");
@@ -170,6 +194,11 @@ export async function getLlmProfile(): Promise<LlmProfile | null> {
 }
 
 async function postChat(profile: LlmProfile, body: Record<string, unknown>): Promise<{ content: string; toolCalls: unknown[] }> {
+  const keyIssue = keyProblem(profile.apiKey);
+  if (keyIssue) {
+    logEvent("AI", `request aborted: API key has a non-ASCII character at ${keyIssue}`);
+    throw new Error(`API Key 含非 ASCII 字符（${keyIssue}），请重新粘贴纯英文/数字的 Key`);
+  }
   let xhr: { response?: unknown; status?: number };
   try {
     xhr = (await Zotero.HTTP.request("POST", chatEndpoint(profile.baseUrl), {

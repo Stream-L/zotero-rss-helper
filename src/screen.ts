@@ -74,11 +74,12 @@ export async function fetchLibraryTagStats(
   try {
     // 注：tags 表没有 libraryID 列（Zotero 的标签按条目关联），库归属要 join items 判断。
     // 以 "/" 开头的是 Zotero 的内部标签（如 /unread），不作为研究领域线索。
+    // Zotero.DB 拒绝查询里的字符串字面量，LIKE 的模式也必须走绑定参数。
     const rows = (await db.queryAsync(
       "SELECT t.name AS name, COUNT(DISTINCT it.itemID) AS n " +
         "FROM itemTags it JOIN tags t ON t.tagID = it.tagID JOIN items i ON i.itemID = it.itemID " +
-        "WHERE i.libraryID = ? AND t.name NOT LIKE '/%' GROUP BY t.name ORDER BY n DESC LIMIT ?",
-      [libraryID, limit],
+        "WHERE i.libraryID = ? AND t.name NOT LIKE ? GROUP BY t.name ORDER BY n DESC LIMIT ?",
+      [libraryID, "/%", limit],
     )) as Array<{ name?: unknown; n?: unknown }>;
     const stats = rows
       .map((row) => ({ name: String(row?.name ?? "").trim(), count: Number(row?.n) || 0 }))

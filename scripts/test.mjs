@@ -344,6 +344,25 @@ assert.match(testRequest.url, /\/chat\/completions$/);
 assert.equal(testRequest.body.messages.length, 1);
 assert.match(testRequest.auth, /^Bearer test-key$/);
 
+// 回归：Key 里混进中文时 Headers.append 会抛 ByteString 错误。保存时应当拒绝，
+// 运行时遇到坏 Key 应当跳过并回退到 Zotero GPT，而不是当成网络失败。
+const { saveApiKey } = await import("../build/src/llm.js");
+assert.equal(await saveApiKey("sk-坏key"), false, "non-ASCII keys must be rejected");
+assert.equal(prefs.get("extensions.rss-helper.apiKeyEnc"), "enc:test-key", "rejected key must not overwrite the stored one");
+prefs.set("extensions.rss-helper.apiKeyEnc", "enc:sk-坏key");
+prefs.set("extensions.zotero.zoterogpt.secretKey", "sk-zoterogpt");
+let fallbackAuth;
+globalThis.Zotero.HTTP.request = async (method, url, options) => {
+  fallbackAuth = options.headers.Authorization;
+  return { response: { choices: [{ message: { content: "可用" } }] } };
+};
+const badKeyResult = await testAiConnection();
+assert.equal(badKeyResult.ok, true);
+assert.match(fallbackAuth, /^Bearer sk-zoterogpt$/);
+assert.ok(debugLines.some((line) => line.includes("saved RSS Helper key ignored")), "log must explain the ignored key");
+prefs.delete("extensions.zotero.zoterogpt.secretKey");
+prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
+
 // 任务4：标签名可在设置页改成自己的命名。
 prefs.delete("extensions.zotero.zoterogpt.secretKey");
 prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
@@ -380,9 +399,9 @@ const preview = { textContent: "" };
 const { onPrefsPreviewTags } = await import("../build/src/prefs-pane.js");
 prefs.set("extensions.rss-helper.tagHintCount", "6");
 await onPrefsPreviewTags({ getElementById: (id) => (id === "rss-helper-tag-preview" ? preview : null) });
-assert.equal(dbQueries.at(-1).params[1], 6, "preview must use the configured tag count");
+assert.equal(dbQueries.at(-1).params[2], 6, "preview must use the configured tag count");
 assert.match(dbQueries.at(-1).sql, /JOIN items i ON i\.itemID = it\.itemID/, "tags have no libraryID column; must join items");
-assert.match(dbQueries.at(-1).sql, /NOT LIKE '\/%'/, "internal tags like /unread must be filtered out");
+assert.equal(dbQueries.at(-1).params[1], "/%", "LIKE patterns must be bound; Zotero rejects string literals in queries");
 assert.equal(dbQueries.at(-1).params[0], 1, "tag hints must come from the user library");
 assert.match(preview.textContent, /供应链管理\(12\)/);
 assert.match(preview.textContent, /前 2 个/);

@@ -1,6 +1,6 @@
 {
   "name": "zotero-rss-helper",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "private": true,
   "description": "Crossref metadata enrichment, translation, and AI screening for Zotero RSS items",
   "scripts": {
