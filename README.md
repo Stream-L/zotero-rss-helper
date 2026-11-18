@@ -62,8 +62,9 @@ After installation, the plugin works automatically for newly added RSS items. No
 - **给「略过」也打灰色标签**：默认关闭，略过的条目不打标签；
 - **把库内常用标签作为研究领域的线索**：把使用频次最高的若干标签写进提示词，帮助模型判断你的方向；「提取标签数量」控制取前几个（默认 40，范围 5–120），改完点「预览库内标签」就能先看清这批标签和条目数，再点「从库内标签归纳领域」让模型总结成领域描述（默认开启）；
 - **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务。API Key 留空时自动读取本机 **Zotero GPT** 插件（`zoterogpt@polygon.org`）保存的 `extensions.zotero.zoterogpt.*`；自己填的 Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。模型不支持 `tools` 或 `response_format` 时自动降级重试；失败摘要会直接显示在进度窗，完整错误写到数据目录的 `rss-helper.log`。
+- **测试 AI 连接**：保存 Key 后点一下，插件会发一条最小的 `chat/completions` 请求，状态行会显示用的是哪个 Key、哪个模型，以及失败时的具体原因；同时把 `connection test: …` 写进 `rss-helper.log`。AI 筛选失败时先看这里，再看日志。
 
-Settings cover auto-enrichment, auto-translation through Translate for Zotero, and AI screening. Enrichment only runs for newly added feed items and skips items that already have a DOI, abstract, and journal, so clicking or filing an item does not re-query Crossref; the plugin does not download PDFs itself. Tag hints are configurable in count and can be previewed before use; the "generate domain prompt" button turns them into a research-area description. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store. Unsupported `tools`/`response_format` requests fall back automatically, and full errors go to `rss-helper.log` in the data directory.
+Settings cover auto-enrichment, auto-translation through Translate for Zotero, and AI screening. Enrichment only runs for newly added feed items and skips items that already have a DOI, abstract, and journal, so clicking or filing an item does not re-query Crossref; the plugin does not download PDFs itself. Tag hints are configurable in count and can be previewed before use; the "generate domain prompt" button turns them into a research-area description. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store. **Test AI connection** sends one minimal request and reports which key/model was used, so configuration problems are visible before running a batch. Unsupported `tools`/`response_format` requests fall back automatically, and full errors go to `rss-helper.log` in the data directory.
 
 ## AI 筛选 | AI screening
 
@@ -93,6 +94,15 @@ Screening tags only "important" and "watch" by default, works on multi-selected 
 条目菜单里也有同样的「测试：打 rss/test 灰蓝标签」，先跑它确认右键没问题，再跑 AI 筛选。
 
 On items: enrich, translate, AI-screen, clear AI tags, and a `rss/test` probe. On a collection or an RSS feed: screen everything, clear AI tags, or run the probe.
+
+## 日志与排查 | Logs and troubleshooting
+
+- 日志文件：`<Zotero 数据目录>\rss-helper.log`（通常是 `C:\Users\<你>\Zotero\rss-helper.log`），单文件超过约 200 KB 会自动截断；
+- 记录内容：插件启动版本、菜单注册/点击、每次 AI 请求的来源（插件设置还是 Zotero GPT）、AI 连接测试、请求失败的状态和响应体、标签查询失败原因、附件下载 API 的调用方；
+- 附件下载探针只读取调用栈，不改变 Zotero 的行为：出现重复 PDF 时，日志里的 `attachments: addAvailableFiles(...) from ...` 能直接看出是谁调用的；
+- `Get-Content` 在部分 PowerShell 里会把 UTF-8 日志显示成乱码，用编辑器打开或 `Select-String` 读取即可。
+
+Log file lives in the Zotero data directory as `rss-helper.log` and is truncated at about 200 KB. It records startup, menu registration/click, AI request source and failures (status and response body), tag query errors, and callers of Zotero's attachment download API. The attachment probe is read-only and does not change Zotero's behavior.
 
 ## 后续计划 | Roadmap
 

@@ -18,6 +18,7 @@ const modules = [
   "crossref",
   "settings",
   "log",
+  "diag",
   "toast",
   "llm",
   "translate",

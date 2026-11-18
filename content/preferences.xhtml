@@ -159,6 +159,14 @@
         />
       </hbox>
       <description id="rss-helper-apiKey-status" class="description">未保存</description>
+      <hbox align="center">
+        <button
+          id="rss-helper-test-ai"
+          label="测试 AI 连接"
+          oncommand="Zotero.RSSHelper.hooks.onPrefsTestAi(document)"
+        />
+        <description id="rss-helper-test-ai-status" class="description"></description>
+      </hbox>
       <description class="description">
         密钥用系统钥匙串加密后保存，不写入明文配置。AI 调用失败时，状态栏会显示一行错误摘要，完整信息写到数据目录的 rss-helper.log。
       </description>

@@ -5,6 +5,7 @@
  * Zotero 7+ 用 createXULElement 创建菜单项，重复注册时按 id 去重。
  */
 import { enrichItem } from "./item-hook";
+import { logEvent } from "./log";
 import { applyTestTag, clearAiTags, screenCollection, screenFeed, screenItems, type ItemLike } from "./screen";
 import { toast } from "./toast";
 import { translateItems } from "./translate";
@@ -86,15 +87,14 @@ function addMenuItem(doc: any, popup: any, label: string, command: () => void | 
   const item = doc.createXULElement("menuitem");
   item.setAttribute("label", label);
   item.addEventListener("command", () => {
+    logEvent("menu", `clicked: ${label}`);
     try {
       const result = command();
       if (result && typeof (result as Promise<void>).catch === "function") {
-        (result as Promise<void>).catch((error: unknown) =>
-          Zotero.debug(`[rss-helper] menu action failed: ${String(error)}`),
-        );
+        (result as Promise<void>).catch((error: unknown) => logEvent("menu", `action failed (${label}): ${String(error)}`));
       }
     } catch (error) {
-      Zotero.debug(`[rss-helper] menu action failed: ${String(error)}`);
+      logEvent("menu", `action failed (${label}): ${String(error)}`);
     }
   });
   popup.appendChild(item);
@@ -229,7 +229,7 @@ export function registerContextMenu(win: WinLike): void {
   registerItemMenu(win);
   registerCollectionMenu(win);
   registered.add(win);
-  Zotero.debug("[rss-helper] context menus registered");
+  logEvent("menu", `registered in window (item=${Boolean(doc.getElementById(ITEM_MENU_ID))}, collection=${Boolean(doc.getElementById(COLLECTION_MENU_ID))})`);
 }
 
 export function unregisterContextMenu(win: WinLike): void {

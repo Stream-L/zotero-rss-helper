@@ -1,7 +1,9 @@
 import { lookupCrossref, mergeMetadata } from "./crossref";
+import { installAttachmentProbe, removeAttachmentProbe } from "./diag";
 import { registerItemHook, unregisterItemHook } from "./item-hook";
+import { logEvent } from "./log";
 import { registerContextMenu, unregisterContextMenu } from "./menu";
-import { PLUGIN_ID, onPrefsCommand, onPrefsGeneratePrompt, onPrefsLoad, onPrefsPreviewTags, registerPreferencePane } from "./prefs-pane";
+import { PLUGIN_ID, onPrefsCommand, onPrefsGeneratePrompt, onPrefsLoad, onPrefsPreviewTags, onPrefsTestAi, registerPreferencePane } from "./prefs-pane";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
 import { ensureDefaults } from "./settings";
@@ -32,14 +34,15 @@ export async function enrichRssEntry(entry: RssEntryLike): Promise<RssEntryLike>
 
 export function startup(data?: StartupData): void {
   const rootURI = data?.rootURI ?? data?.resourceURI?.spec;
-  Zotero.debug(`[rss-helper] startup (rootURI=${rootURI ?? "unknown"})`);
+  logEvent("startup", `RSS Helper ${data?.version ?? "?"} starting (rootURI=${rootURI ?? "unknown"})`);
   (Zotero as unknown as { RSSHelper?: unknown }).RSSHelper = {
     version: data?.version ?? "",
-    hooks: { onPrefsLoad, onPrefsCommand, onPrefsGeneratePrompt, onPrefsPreviewTags },
+    hooks: { onPrefsLoad, onPrefsCommand, onPrefsGeneratePrompt, onPrefsPreviewTags, onPrefsTestAi },
   };
   try {
     ensureDefaults();
     registerItemHook();
+    installAttachmentProbe();
   } catch (error) {
     Zotero.debug(`[rss-helper] item observer setup failed: ${String(error)}`);
   }
@@ -98,6 +101,7 @@ export function onMainWindowUnload(data?: { window?: any }): void {
 
 export function shutdown(): void {
   unregisterItemHook();
+  removeAttachmentProbe();
   enrichmentProgress.dispose();
   toast.dispose();
   const zotero = Zotero as unknown as { RSSHelper?: unknown };

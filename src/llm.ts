@@ -62,13 +62,19 @@ export async function saveApiKey(key: string): Promise<boolean> {
 export async function loadApiKey(): Promise<string | null> {
   const stored = getRawPref(API_KEY_PREF);
   if (typeof stored !== "string" || !stored) return null;
+  // OSKeyStore.decrypt 对未加密的值会原样返回，所以这里始终走 decrypt，兼容手工写入的明文。
   const keyStore = (Zotero as unknown as { OSKeyStore?: { decrypt?: (value: string) => Promise<string> } }).OSKeyStore;
-  if (!keyStore?.decrypt) return null;
+  if (!keyStore?.decrypt) {
+    logEvent("AI", "OSKeyStore unavailable; cannot read the saved RSS Helper key");
+    return null;
+  }
   try {
     const plain = await keyStore.decrypt(stored);
-    return typeof plain === "string" && plain ? plain : null;
+    if (typeof plain === "string" && plain) return plain;
+    logEvent("AI", "saved RSS Helper key decrypted to an empty value");
+    return null;
   } catch (error) {
-    Zotero.debug(`[rss-helper] failed to decrypt API key: ${String(error)}`);
+    logEvent("AI", `failed to decrypt saved RSS Helper key: ${String(error).slice(0, 200)}`);
     return null;
   }
 }
@@ -119,6 +125,7 @@ export function chatEndpoint(baseUrl: string): string {
 async function resolveLlmProfile(): Promise<LlmProfile | null> {
   const ownKey = await loadApiKey();
   if (ownKey) {
+    logEvent("AI", "using API key saved by RSS Helper");
     return {
       baseUrl: getTextSetting("llmBaseUrl"),
       model: getTextSetting("llmModel"),
@@ -130,14 +137,22 @@ async function resolveLlmProfile(): Promise<LlmProfile | null> {
   }
 
   const entry = readZoteroGptEntry();
-  const rawKey = String(getAbsolutePref(ZOTEROGPT_SECRET) ?? entry?.secretKey ?? "");
+  const prefKey = getAbsolutePref(ZOTEROGPT_SECRET);
+  const rawKey = String(prefKey ?? entry?.secretKey ?? "");
+  logEvent(
+    "AI",
+    `no usable RSS Helper key; zoterogpt pref=${prefKey ? "present" : "missing"} settings=${entry ? "parsed" : "none"}`,
+  );
   const apiKey = await decryptValue(rawKey);
-  if (!apiKey) return null;
+  if (!apiKey) {
+    logEvent("AI", "no API key from RSS Helper or Zotero GPT");
+    return null;
+  }
   const baseUrl = String(getAbsolutePref(ZOTEROGPT_API) ?? entry?.api ?? "");
   const model = String(getAbsolutePref(ZOTEROGPT_MODEL) ?? entry?.model ?? "");
   const temperature = Number(entry?.temperature ?? 0.2);
   const maxTokens = Number(entry?.maxTokens ?? 800);
-  return {
+  const profile: LlmProfile = {
     baseUrl: baseUrl || "https://api.siliconflow.cn",
     model: model || "Qwen/Qwen3-8B",
     apiKey,
@@ -145,6 +160,8 @@ async function resolveLlmProfile(): Promise<LlmProfile | null> {
     maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 800,
     source: "zoterogpt",
   };
+  logEvent("AI", `using Zotero GPT config: ${profile.model} @ ${profile.baseUrl}`);
+  return profile;
 }
 
 /** 当前可用的配置；没有则返回 null（设置页、菜单据此给提示）。 */
@@ -298,4 +315,31 @@ async function chatWithToolsOnce(
     response_format: { type: "json_object" },
   });
   return parseJsonObject(content);
+}
+
+/**
+ * 设置页的「测试 AI 连接」：发一条极小的请求，把配置来源、模型和失败原因都写进日志。
+ * 返回一句可直接显示给用户的中文结果。
+ */
+export async function testAiConnection(): Promise<{ ok: boolean; message: string }> {
+  const profile = await resolveLlmProfile();
+  if (!profile) {
+    logEvent("AI", "connection test: no profile");
+    return { ok: false, message: "未找到 API Key（插件设置和 Zotero GPT 都没有）" };
+  }
+  const where = profile.source === "rss-helper" ? "插件设置" : "Zotero GPT";
+  logEvent("AI", `connection test: ${profile.model} @ ${chatEndpoint(profile.baseUrl)} (${where})`);
+  try {
+    const { content } = await postChat(profile, {
+      messages: [{ role: "user", content: "只回复两个字：可用" }],
+      max_tokens: 16,
+    });
+    const text = content.trim().slice(0, 40) || "(空)";
+    logEvent("AI", `connection test ok: ${text}`);
+    return { ok: true, message: `连接成功（${where} · ${profile.model}）：${text}` };
+  } catch (error) {
+    const detail = String(error).slice(0, 200);
+    logEvent("AI", `connection test failed: ${detail}`);
+    return { ok: false, message: `连接失败：${detail}` };
+  }
 }

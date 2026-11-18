@@ -9,6 +9,8 @@ const windows = [];
 const lines = [];
 const dbQueries = [];
 const feedQueries = [];
+const prefGetCalls = [];
+const debugLines = [];
 let observer;
 const item = {
   id: 7,
@@ -48,7 +50,7 @@ const rssItem = {
 const prefs = new Map();
 globalThis.Zotero = {
   Prefs: {
-    get(key) { return prefs.has(key) ? prefs.get(key) : undefined; },
+    get(key, global) { prefGetCalls.push({ key, global }); return prefs.has(key) ? prefs.get(key) : undefined; },
     set(key, value) { prefs.set(key, value); },
   },
   ProgressWindow: class {
@@ -134,6 +136,7 @@ globalThis.Zotero = {
     },
   },
   debug(...args) {
+    debugLines.push(args.map((value) => String(value)).join(" "));
     if (process.env.RSS_HELPER_DEBUG) console.error("[zotero]", ...args);
   },
 };
@@ -318,6 +321,29 @@ assert.equal(gptRequest.url, "https://api.siliconflow.cn/v1/chat/completions");
 assert.match(gptRequest.auth, /^Bearer sk-zoterogpt$/);
 assert.equal(gptRequest.body.model, "Qwen/Qwen3-8B");
 
+// 回归：读 Zotero GPT 的配置必须带 global=true。漏掉时 Zotero.Prefs.get 会补 extensions.zotero. 前缀，
+// 真机上永远读不到，表现为「设置页显示有 Key，但一筛选就说未配置」。
+prefGetCalls.length = 0;
+const { getAbsolutePref } = await import("../build/src/settings.js");
+assert.equal(getAbsolutePref("extensions.zotero.zoterogpt.secretKey"), "sk-zoterogpt");
+assert.equal(prefGetCalls.at(-1).global, true, "absolute pref reads must pass global=true");
+
+// 设置页「测试 AI 连接」：成功时回报来源和模型，并且真的发了一次最小请求。
+let testRequest;
+globalThis.Zotero.HTTP.request = async (method, url, options) => {
+  testRequest = { url, body: JSON.parse(options.body), auth: options.headers.Authorization };
+  return { response: { choices: [{ message: { content: "可用" } }] } };
+};
+const { testAiConnection } = await import("../build/src/llm.js");
+prefs.delete("extensions.zotero.zoterogpt.secretKey");
+prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
+const okResult = await testAiConnection();
+assert.equal(okResult.ok, true);
+assert.match(okResult.message, /连接成功/);
+assert.match(testRequest.url, /\/chat\/completions$/);
+assert.equal(testRequest.body.messages.length, 1);
+assert.match(testRequest.auth, /^Bearer test-key$/);
+
 // 任务4：标签名可在设置页改成自己的命名。
 prefs.delete("extensions.zotero.zoterogpt.secretKey");
 prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
@@ -420,6 +446,32 @@ assert.ok(tagItem.tags.includes(levelTag("important")), "feed screening must tag
 unregisterContextMenu(fakeWin);
 globalThis.Zotero.HTTP.request = originalRequest;
 
+// 「测试 AI 连接」的失败路径：两处都没有 Key 时要说清楚，而不是静默失败。
+prefs.delete("extensions.rss-helper.apiKeyEnc");
+prefs.delete("extensions.zotero.zoterogpt.secretKey");
+const failResult = await testAiConnection();
+assert.equal(failResult.ok, false);
+assert.match(failResult.message, /未找到 API Key/);
+prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
+
+// 附件探针：只包一层记录调用方，不能改变原函数的返回值；shutdown 时必须还原。
+const { installAttachmentProbe, removeAttachmentProbe } = await import("../build/src/diag.js");
+let probeHits = 0;
+globalThis.Zotero.Attachments = {
+  async addAvailableFiles(items) {
+    probeHits += 1;
+    return items.length;
+  },
+};
+installAttachmentProbe();
+debugLines.length = 0;
+assert.equal(await globalThis.Zotero.Attachments.addAvailableFiles([{ id: 5 }]), 1);
+assert.equal(probeHits, 1, "probe must call through to the original method");
+assert.ok(debugLines.some((line) => line.includes("attachments: addAvailableFiles([item#5])")), "probe must log the caller and args");
+removeAttachmentProbe();
+assert.equal(typeof globalThis.Zotero.Attachments.addAvailableFiles.__rssHelperProbe, "undefined", "probe must be removed on shutdown");
+assert.equal(await globalThis.Zotero.Attachments.addAvailableFiles([{ id: 6 }]), 1);
+assert.equal(probeHits, 2);
 
 const bundle = readFileSync(new URL("../build/bootstrap.js", import.meta.url), "utf8");
 const context = { Zotero: globalThis.Zotero, console };

@@ -98,10 +98,14 @@ export function getRawPref(key: string): unknown {
   }
 }
 
-/** 读取插件分支之外的完整 pref 键（例如从 Zotero GPT 插件读配置）。 */
+/**
+ * 读取插件分支之外的完整 pref 键（例如从 Zotero GPT 插件读配置）。
+ * 必须传 global=true：Zotero.Prefs.get(key) 默认会补 extensions.zotero. 前缀，
+ * 之前漏了这个参数，导致读 Zotero GPT 的配置永远是 undefined。
+ */
 export function getAbsolutePref(key: string): unknown {
   try {
-    return Zotero.Prefs.get(key);
+    return (Zotero.Prefs.get as unknown as (pref: string, global?: boolean) => unknown)(key, true);
   } catch {
     return undefined;
   }

@@ -5,7 +5,7 @@
  * - 模型可先调用工具查条目详情和库内常用标签，再下结论；
  * - 标签名可在设置页改，颜色由 Zotero.Tags.setColor 设置。
  */
-import { chatWithTools, getLlmProfile, type ToolDefinition } from "./llm";
+import { chatEndpoint, chatWithTools, getLlmProfile, type ToolDefinition } from "./llm";
 import { logEvent } from "./log";
 import { enrichmentProgress } from "./progress";
 import { getSetting, getTagHintCount, getTextSetting } from "./settings";
@@ -268,11 +268,14 @@ export function clearAiTags(item: ItemLike): void {
 /** 菜单入口：多选条目批量筛选，用同一个弱进度窗刷新进度。 */
 export async function screenItems(items: ItemLike[], source = "AI 筛选"): Promise<void> {
   if (!items.length) return;
+  logEvent("AI", `screen start: ${items.length} item(s), source=${source}`);
   const profile = await getLlmProfile();
   if (!profile) {
-    toast.show("请先在设置页保存 API Key，或配置 Zotero GPT", "cross");
+    logEvent("AI", "screen aborted: no usable profile");
+    toast.show("AI 未配置：插件设置里没有 Key，Zotero GPT 的 Key 也读不到，详见 rss-helper.log", "cross");
     return;
   }
+  logEvent("AI", `screen profile: ${profile.source} · ${profile.model} @ ${chatEndpoint(profile.baseUrl)}`);
   const tagHints = getSetting("useLibraryTags") ? await fetchLibraryTags(tagHintLibraryID()) : [];
   const counts: Record<Level, number> = { important: 0, watch: 0, skip: 0 };
   let failed = 0;

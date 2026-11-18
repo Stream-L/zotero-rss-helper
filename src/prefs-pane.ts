@@ -1,4 +1,4 @@
-import { chatJSON, getLlmProfile, saveApiKey } from "./llm";
+import { chatJSON, getLlmProfile, saveApiKey, testAiConnection } from "./llm";
 import { logEvent } from "./log";
 import { fetchLibraryTagStats, getLastTagError, tagHintLibraryID } from "./screen";
 import { ensureDefaults, getTagHintCount, setTextSetting } from "./settings";
@@ -108,6 +108,19 @@ export async function onPrefsGeneratePrompt(target: unknown): Promise<void> {
     logEvent("prefs", `failed to generate domain prompt: ${String(error)}`);
     if (status) status.textContent = `生成失败：${String(error).slice(0, 120)}`;
   }
+}
+
+/**
+ * 「测试 AI 连接」：直接打一次最小请求，成功/失败都显示在面板上并写日志。
+ * 这比等右键筛选失败再猜配置问题快，也顺手验证 Key 和模型名。
+ */
+export async function onPrefsTestAi(target: unknown): Promise<void> {
+  const doc = resolveDocument(target);
+  if (!doc) return;
+  const status = doc.getElementById("rss-helper-test-ai-status") as unknown as ElementLike | null;
+  if (status) status.textContent = "正在测试…";
+  const result = await testAiConnection();
+  if (status) status.textContent = result.message;
 }
 
 /**
