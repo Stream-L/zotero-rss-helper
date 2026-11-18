@@ -106,6 +106,15 @@ globalThis.Zotero = {
     },
   },
   Items: { get: (id) => (id === 7 ? item : id === 8 ? rssItem : undefined) },
+  Libraries: { userLibraryID: 1 },
+  DB: {
+    async queryAsync() {
+      return [
+        { name: "供应链管理", n: 12 },
+        { name: "碳市场", n: 4 },
+      ];
+    },
+  },
   Notifier: {
     registerObserver(value) {
       observer = value;
@@ -238,6 +247,7 @@ assert.match(screenRequests[0].url, /\/chat\/completions$/);
 assert.match(screenRequests[0].auth, /^Bearer test-key$/);
 assert.equal(screenRequests[0].body.tools[0].function.name, "get_item_details");
 assert.match(screenRequests[0].body.messages[0].content, /管理科学与工程/, "system prompt must embed the custom domain prompt");
+assert.match(screenRequests[0].body.messages[0].content, /供应链管理/, "library tags must be fed into the prompt as domain evidence");
 
 // 任务4：工具调用——模型先取条目详情，再返回结论。
 screenRequests = [];
@@ -304,6 +314,25 @@ const renamedItem = { ...tagItem, id: 24, tags: [], fields: { ...tagItem.fields 
 assert.equal(await screenItem(renamedItem), "important");
 assert.deepEqual(renamedItem.tags, ["AI/必读"]);
 assert.equal(colorCall.name, "AI/必读");
+
+// 设置页「从库内标签归纳领域」：把标签交给模型总结成领域描述，直接写回提示词。
+let promptRequest;
+globalThis.Zotero.HTTP.request = async (method, url, options) => {
+  promptRequest = JSON.parse(options.body);
+  return { response: { choices: [{ message: { content: JSON.stringify({ profile: "1. 供应链管理：库存、定价\n2. 碳市场：政策评估" }) } }] } };
+};
+const promptStatus = { textContent: "" };
+const promptTextarea = { value: "" };
+const { onPrefsGeneratePrompt } = await import("../build/src/prefs-pane.js");
+await onPrefsGeneratePrompt({
+  getElementById: (id) =>
+    id === "rss-helper-prompt-status" ? promptStatus : id === "rss-helper-customPrompt" ? promptTextarea : null,
+});
+assert.match(promptTextarea.value, /供应链管理/, "generated profile must be written into the textarea");
+assert.equal(prefs.get("extensions.rss-helper.customPrompt"), promptTextarea.value);
+assert.match(promptRequest.messages[0].content, /研究兴趣分析助手/);
+assert.match(promptRequest.messages[1].content, /供应链管理\(12\)/, "tag counts must be passed to the model");
+assert.match(promptStatus.textContent, /已写入/);
 globalThis.Zotero.HTTP.request = originalRequest;
 delete globalThis.Zotero.Tags;
 

@@ -1,7 +1,7 @@
 import { lookupCrossref, mergeMetadata } from "./crossref";
 import { registerItemHook, unregisterItemHook } from "./item-hook";
 import { registerContextMenu, unregisterContextMenu } from "./menu";
-import { PLUGIN_ID, onPrefsCommand, onPrefsLoad, registerPreferencePane } from "./prefs-pane";
+import { PLUGIN_ID, onPrefsCommand, onPrefsGeneratePrompt, onPrefsLoad, registerPreferencePane } from "./prefs-pane";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
 import { ensureDefaults } from "./settings";
@@ -35,7 +35,7 @@ export function startup(data?: StartupData): void {
   Zotero.debug(`[rss-helper] startup (rootURI=${rootURI ?? "unknown"})`);
   (Zotero as unknown as { RSSHelper?: unknown }).RSSHelper = {
     version: data?.version ?? "",
-    hooks: { onPrefsLoad, onPrefsCommand },
+    hooks: { onPrefsLoad, onPrefsCommand, onPrefsGeneratePrompt },
   };
   try {
     ensureDefaults();

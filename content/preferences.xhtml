@@ -65,6 +65,14 @@
         style="width: 460px;"
         preference="extensions.zotero.extensions.rss-helper.customPrompt"
       ></html:textarea>
+      <hbox>
+        <button
+          id="rss-helper-generate-prompt"
+          label="从库内标签归纳领域"
+          oncommand="Zotero.RSSHelper.hooks.onPrefsGeneratePrompt(document)"
+        />
+      </hbox>
+      <description id="rss-helper-prompt-status" class="description"></description>
 
       <label><html:h3>标签</html:h3></label>
       <description class="description">
@@ -104,11 +112,11 @@
       />
       <checkbox
         id="rss-helper-useLibraryTags"
-        label="参考库内常用标签，让模型优先复用已有标签"
+        label="把库内常用标签作为研究领域的线索"
         preference="extensions.zotero.extensions.rss-helper.useLibraryTags"
       />
       <description class="description">
-        取使用频次最高的 40 个标签作为候选，避免模型自己造新词；不保证处理同义重复的标签。
+        取使用频次最高的 40 个标签写进提示词，帮助模型判断你的方向；也可以点上面的按钮直接归纳成领域描述。不保证合并同义重复的标签。
       </description>
 
       <label><html:h3>接口</html:h3></label>

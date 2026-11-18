@@ -1,5 +1,6 @@
-import { getLlmProfile, saveApiKey } from "./llm";
-import { ensureDefaults } from "./settings";
+import { chatJSON, getLlmProfile, saveApiKey } from "./llm";
+import { fetchLibraryTagStats } from "./screen";
+import { ensureDefaults, setTextSetting } from "./settings";
 
 export const PLUGIN_ID = "zotero-rss-helper@github.com";
 
@@ -62,6 +63,47 @@ export async function onPrefsCommand(target: unknown): Promise<void> {
   const ok = await saveApiKey(value);
   if (input) input.value = "";
   if (status) status.textContent = ok ? (value.trim() ? "已保存（系统钥匙串加密）" : await describeProfile()) : "保存失败：系统钥匙串不可用";
+}
+
+/** 让模型根据文献库里常用的主题标签，归纳出用户的研究领域，直接写进自定义提示词。 */
+const GENERATE_SYSTEM = [
+  "你是研究兴趣分析助手。根据用户文献库里使用频次较高的标签，归纳出 2-4 个具体的研究领域和偏好。",
+  "要求：",
+  "- 只输出一个 JSON 对象：{\"profile\":\"多行中文文本\"}；",
+  "- 不要罗列全部标签，也不要编造具体论文；",
+  "- 每个领域单独一行，格式如「1. 供应链与运营管理：库存控制、定价、风险传染」；",
+  "- 最后一行写方法偏好与不关心的内容，例如「偏好实证识别或优化建模；不关心纯综述和会议通知」；",
+  "- 标签有同义重复时自行归并，不要照抄。",
+].join("\n");
+
+export async function onPrefsGeneratePrompt(target: unknown): Promise<void> {
+  const doc = resolveDocument(target);
+  if (!doc) return;
+  const status = doc.getElementById("rss-helper-prompt-status") as unknown as ElementLike | null;
+  const textarea = doc.getElementById("rss-helper-customPrompt") as unknown as ElementLike | null;
+  if (status) status.textContent = "正在根据库内标签归纳…";
+  const libraries = (Zotero as unknown as { Libraries?: { userLibraryID?: number } }).Libraries;
+  const libraryID = Number(libraries?.userLibraryID ?? 1);
+  const stats = await fetchLibraryTagStats(libraryID, 80, true);
+  if (!stats.length) {
+    if (status) status.textContent = "库里还没有标签：先给文献打一些主题标签，或手动填写上面的领域描述";
+    return;
+  }
+  try {
+    const answer = await chatJSON(
+      GENERATE_SYSTEM,
+      `标签（格式为 标签名(条目数)）：${stats.map((stat) => `${stat.name}(${stat.count})`).join("、")}`,
+      700,
+    );
+    const profile = String(answer.profile ?? "").trim();
+    if (!profile) throw new Error("模型没有返回 profile 字段");
+    setTextSetting("customPrompt", profile);
+    if (textarea) textarea.value = profile;
+    if (status) status.textContent = "已写入上面的领域描述，可继续手动修改";
+  } catch (error) {
+    Zotero.debug(`[rss-helper] failed to generate domain prompt: ${String(error)}`);
+    if (status) status.textContent = `生成失败：${String(error).slice(0, 80)}`;
+  }
 }
 
 /**

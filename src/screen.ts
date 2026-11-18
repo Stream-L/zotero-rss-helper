@@ -43,11 +43,16 @@ export type ItemLike = {
 
 export type ScreenContext = { tagHints: string[] };
 
-const tagCache = new Map<number, string[]>();
+export type TagStat = { name: string; count: number };
 
-/** 取库内使用频次最高的标签，作为模型推荐标签的候选，避免它自己造词。 */
-export async function fetchLibraryTags(libraryID: number, limit = 40): Promise<string[]> {
-  const cached = tagCache.get(libraryID);
+const tagCache = new Map<number, TagStat[]>();
+
+/**
+ * 取库内使用频次最高的标签。用途是让模型据此推断用户的研究领域（写进系统提示词），
+ * 而不是把标签原样丢回去当筛选结果。
+ */
+export async function fetchLibraryTagStats(libraryID: number, limit = 40, refresh = false): Promise<TagStat[]> {
+  const cached = refresh ? undefined : tagCache.get(libraryID);
   if (cached) return cached;
   const db = (Zotero as unknown as { DB?: { queryAsync(sql: string, params: unknown[]): Promise<unknown[]> } }).DB;
   if (!db?.queryAsync) return [];
@@ -56,23 +61,38 @@ export async function fetchLibraryTags(libraryID: number, limit = 40): Promise<s
       "SELECT t.name AS name, COUNT(it.itemID) AS n FROM itemTags it JOIN tags t USING(tagID) " +
         "WHERE t.libraryID = ? GROUP BY t.name ORDER BY n DESC LIMIT ?",
       [libraryID, limit],
-    )) as Array<{ name?: unknown }>;
-    const names = rows.map((row) => String(row?.name ?? "")).filter(Boolean);
-    tagCache.set(libraryID, names);
-    return names;
+    )) as Array<{ name?: unknown; n?: unknown }>;
+    const stats = rows
+      .map((row) => ({ name: String(row?.name ?? "").trim(), count: Number(row?.n) || 0 }))
+      .filter((stat) => stat.name);
+    tagCache.set(libraryID, stats);
+    return stats;
   } catch (error) {
     Zotero.debug(`[rss-helper] failed to read library tags: ${String(error)}`);
     return [];
   }
 }
 
-function buildSystemPrompt(): string {
+export async function fetchLibraryTags(libraryID: number, limit = 40): Promise<string[]> {
+  return (await fetchLibraryTagStats(libraryID, limit)).map((stat) => stat.name);
+}
+
+function buildSystemPrompt(tagHints: string[] = []): string {
   const custom = getTextSetting("customPrompt");
-  return [
+  const lines = [
     "你是科研文献筛选助手，替研究者从 RSS 推送里挑出真正值得读的论文。",
     "",
     "研究者的领域与偏好（这段由用户自定义，优先级最高）：",
     custom,
+  ];
+  if (tagHints.length) {
+    lines.push(
+      "",
+      "用户文献库里使用频次最高的标签（用来佐证/补全用户的研究领域；与上面的自述冲突时以自述为准）：",
+      tagHints.join("、"),
+    );
+  }
+  lines.push(
     "",
     "分级：",
     "- important：方法与问题都切中偏好，或提出新理论/新方法，值得精读并跟进；",
@@ -80,10 +100,11 @@ function buildSystemPrompt(): string {
     "- skip：与偏好无关、纯综述/征稿/会议通知/书评/新闻稿，或信息不足以判断。",
     "",
     "如果标题和摘要不足以判断，可以先调用 get_item_details 获取条目完整信息；",
-    "如果需要推荐标签，可以调用 get_library_tags 获取库内常用标签。不要为了凑数调用工具。",
+    "如果需要核对库内标签，可以调用 get_library_tags。不要为了凑数调用工具。",
     "",
     '只返回一个 JSON 对象，不要输出其他文本：{"level":"important|watch|skip","score":1-5,"reason":"不超过40字的中文理由","topic":"主题关键词","suggestedTag":"可选，必须是库内常用标签之一"}',
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 function buildUserPrompt(item: ItemLike, context?: ScreenContext): string {
@@ -102,7 +123,7 @@ function buildUserPrompt(item: ItemLike, context?: ScreenContext): string {
     `摘要：${abstract ? abstract.slice(0, 2500) : "（RSS 未提供摘要，可以调用 get_item_details 获取）"}`,
   ].filter(Boolean);
   if (getSetting("useLibraryTags") && context?.tagHints?.length) {
-    lines.push("", "库内常用标签（suggestedTag 只能从这里选，没有合适的不填）：", context.tagHints.join("、"));
+    lines.push("", "suggestedTag 只能从系统提示词里的库内标签中选，没有合适的不填。");
   }
   return lines.join("\n");
 }
@@ -200,7 +221,13 @@ export async function screenItem(item: ItemLike, context?: ScreenContext): Promi
   const title = String(item.getField("title") ?? "").trim();
   if (!title) throw new Error("标题为空");
   const hints = context ?? (getSetting("useLibraryTags") ? { tagHints: await fetchLibraryTags(item.libraryID) } : { tagHints: [] });
-  const answer = await chatWithTools(buildSystemPrompt(), buildUserPrompt(item, hints), toolsFor(item, hints), 500, 2);
+  const answer = await chatWithTools(
+    buildSystemPrompt(hints.tagHints),
+    buildUserPrompt(item, hints),
+    toolsFor(item, hints),
+    500,
+    2,
+  );
   const level = normalizeLevel(answer.level);
   if (!level) throw new Error(`模型返回无法识别：${JSON.stringify(answer).slice(0, 120)}`);
   if (level === "skip") await applySkip(item);
