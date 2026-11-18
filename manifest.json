@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero RSS Helper",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Enrich Zotero RSS items with DOI and Crossref metadata.",
   "applications": {
     "zotero": {

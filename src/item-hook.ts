@@ -1,4 +1,5 @@
 import { lookupCrossref, lookupCrossrefByBibliographic, lookupOpenAlexAbstract, type CrossrefClient, type EnrichedMetadata } from "./crossref";
+import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
 
 type ZoteroItemLike = RssEntryLike & { id?: number; getField?(field: string): unknown; setField?(field: string, value: unknown): void; setCreators?(creators: Array<{ firstName?: string; lastName?: string; creatorType: "author" }>): void; saveTx?(): Promise<unknown>; itemTypeID?: number };
@@ -9,17 +10,6 @@ const processed = new Map<number, string>();
 function toEntry(item: ZoteroItemLike): RssEntryLike {
   const get = (field: string) => item.getField?.(field);
   return { title: String(get("title") ?? item.title ?? ""), description: String(get("abstractNote") ?? item.description ?? ""), url: String(get("url") ?? item.url ?? ""), DOI: String(get("DOI") ?? item.DOI ?? ""), publisher: String(get("publisher") ?? item.publisher ?? ""), extra: String(get("extra") ?? item.extra ?? "") };
-}
-
-function notifyUser(message: string, kind: "working" | "success" | "failure"): void {
-  Zotero.debug(`[rss-helper] ${message}`);
-  const ProgressWindow = (Zotero as any).ProgressWindow;
-  if (typeof ProgressWindow !== "function") return;
-  const progress = new ProgressWindow({ closeOnClick: true });
-  progress.changeHeadline("RSS Helper");
-  progress.addDescription(message);
-  progress.show();
-  progress.startCloseTimer(kind === "working" ? 1200 : kind === "success" ? 900 : 1800);
 }
 
 function createClient(): CrossrefClient {
@@ -50,16 +40,17 @@ export async function enrichItem(item: ZoteroItemLike): Promise<void> {
   if (!isFeedItem(item)) return;
   const fingerprint = itemFingerprint(item);
   if (processed.get(item.id) === fingerprint) return;
-  pending.add(item.id);
+  const id = item.id;
+  pending.add(id);
+  enrichmentProgress.start(id, String(item.getField?.("title") ?? item.title ?? ""));
   try {
     const entry = toEntry(item);
     const identity = recognize(entry);
-    notifyUser("Enriching RSS item", "working");
     const client = createClient();
     const metadata = identity.doi ? await lookupCrossref(client, identity.doi) : entry.title && entry.title.length >= 10 ? await lookupCrossrefByBibliographic(client, entry.title) : null;
     if (!metadata) {
-      processed.set(item.id, itemFingerprint(item));
-      notifyUser("No matching metadata found; original RSS data was kept", "failure");
+      processed.set(id, itemFingerprint(item));
+      enrichmentProgress.skip(id);
       return;
     }
     let abstractFound = Boolean(metadata.abstractNote);
@@ -69,14 +60,14 @@ export async function enrichItem(item: ZoteroItemLike): Promise<void> {
     }
     const fieldCount = applyMetadata(item, metadata);
     await item.saveTx?.();
-    processed.set(item.id, itemFingerprint(item));
-    notifyUser(`Enriched ${fieldCount}/7 fields${abstractFound ? "" : "; abstract unavailable"}`, "success");
+    processed.set(id, itemFingerprint(item));
+    enrichmentProgress.succeed(id);
+    Zotero.debug(`[rss-helper] enriched ${fieldCount}/7 fields${abstractFound ? "" : " (abstract unavailable)"}`);
   } catch (error) {
-    processed.set(item.id, itemFingerprint(item));
-    const detail = String(error).toLowerCase().includes("timed out") ? "network timeout" : "request failed";
-    notifyUser(`Enrichment failed (${detail}); original RSS data was kept`, "failure");
+    processed.set(id, itemFingerprint(item));
+    enrichmentProgress.fail(id);
     Zotero.debug(`[rss-helper] enrichment failure: ${String(error)}`);
-  } finally { pending.delete(item.id); }
+  } finally { pending.delete(id); }
 }
 
 const observer = { notify(event: string, type: string, ids: Array<number> | number): void {

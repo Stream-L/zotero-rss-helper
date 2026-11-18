@@ -1,29 +1,31 @@
-import { mkdir, rm } from "node:fs/promises";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { mkdir, rm, readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
-const run = promisify(execFile);
 const root = resolve(".");
 const outputDir = resolve("dist");
-const output = resolve(outputDir, "zotero-rss-helper-0.1.0.xpi");
-const temporaryZip = resolve(outputDir, "zotero-rss-helper-0.1.0.zip");
+const { version } = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+const output = resolve(outputDir, `zotero-rss-helper-${version}.xpi`);
+const temporaryZip = resolve(outputDir, `zotero-rss-helper-${version}.zip`);
 
-await run(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], {
-  cwd: root,
-  ...(process.platform === "win32" ? { shell: true } : {}),
-});
+const build = spawnSync(process.execPath, [resolve("scripts/build.mjs")], { cwd: root, stdio: "inherit" });
+if (build.error) throw build.error;
+if (build.status !== 0) process.exit(build.status ?? 1);
+
 await mkdir(outputDir, { recursive: true });
 await rm(output, { force: true });
 await rm(temporaryZip, { force: true });
 
 if (process.platform === "win32") {
-  const command = `Compress-Archive -Path '${resolve("build", "*")}' -DestinationPath '${temporaryZip}' -Force`;
-  await run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], { cwd: root });
-  await run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Move-Item -LiteralPath '${temporaryZip}' -Destination '${output}' -Force`], { cwd: root });
+  const command = `Compress-Archive -Path '${resolve("build", "*")}' -DestinationPath '${temporaryZip}' -Force; Move-Item -LiteralPath '${temporaryZip}' -Destination '${output}' -Force`;
+  const zip = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], { cwd: root, stdio: "inherit" });
+  if (zip.error) throw zip.error;
+  if (zip.status !== 0) process.exit(zip.status ?? 1);
 } else {
-  await run("zip", ["-qr", temporaryZip, "."], { cwd: resolve(root, "build") });
-  await run("mv", [temporaryZip, output]);
+  const zip = spawnSync("zip", ["-qr", temporaryZip, "."], { cwd: resolve(root, "build"), stdio: "inherit" });
+  if (zip.error) throw zip.error;
+  if (zip.status !== 0) process.exit(zip.status ?? 1);
+  spawnSync("mv", [temporaryZip, output], { stdio: "inherit" });
 }
 
 console.log(`Plugin package complete: ${output}`);

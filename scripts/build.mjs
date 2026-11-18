@@ -1,20 +1,18 @@
 import { mkdir, cp, rm, readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-const run = promisify(execFile);
 await rm("build", { recursive: true, force: true });
 await mkdir("build", { recursive: true });
-const tsc = resolve(process.platform === "win32" ? "node_modules/.bin/tsc.cmd" : "node_modules/.bin/tsc");
+const tsc = resolve("node_modules/typescript/bin/tsc");
 if (!existsSync(tsc)) {
   throw new Error("TypeScript is not installed. Run: npm install --no-audit --no-fund");
 }
-const result = await run(tsc, ["--project", "tsconfig.build.json"], process.platform === "win32" ? { shell: true } : {});
-if (result.stdout) process.stdout.write(result.stdout);
-if (result.stderr) process.stderr.write(result.stderr);
+const result = spawnSync(process.execPath, [tsc, "--project", "tsconfig.build.json"], { stdio: "inherit" });
+if (result.error) throw result.error;
+if (result.status !== 0) process.exit(result.status ?? 1);
 await cp("manifest.json", "build/manifest.json");
-const modules = ["rules", "crossref", "item-hook", "bootstrap"];
+const modules = ["rules", "crossref", "progress", "item-hook", "bootstrap"];
 const bundled = modules.map((name) => {
   const source = readFile(`build/src/${name}.js`, "utf8");
   return source.then((code) => `__modules["./${name}.js"] = function (module, exports, require) {\n${code}\n};`);

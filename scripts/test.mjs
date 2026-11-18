@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { lookupCrossref } from "../build/src/crossref.js";
 
 const calls = [];
 const added = [];
+const windows = [];
+const lines = [];
 let observer;
 const item = {
   id: 7,
@@ -42,10 +46,34 @@ const rssItem = {
 globalThis.Zotero = {
   Prefs: { get: () => false, set() {} },
   ProgressWindow: class {
-    changeHeadline() {}
-    addDescription() {}
-    show() {}
-    startCloseTimer() {}
+    constructor(options) {
+      this.options = options;
+      this.headlinePosts = [];
+      this.shown = 0;
+      this.timers = [];
+      this.descriptions = [];
+      this.closed = false;
+      this.ItemProgress = class {
+        constructor(icon, text) {
+          this.icon = icon;
+          this.text = text;
+          this.progress = [];
+          this.icons = [];
+          this.errored = false;
+          lines.push(this);
+        }
+        setText(text) { this.text = text; }
+        setItemTypeAndIcon(itemType, cssIcon) { this.icons.push(cssIcon); }
+        setProgress(percent) { this.progress.push(percent); }
+        setError() { this.errored = true; }
+      };
+      windows.push(this);
+    }
+    changeHeadline(text, cssIcon, postText) { this.headline = text; this.headlinePosts.push(postText); }
+    addDescription(text) { this.descriptions.push(text); }
+    show() { this.shown += 1; }
+    startCloseTimer(ms) { this.timers.push(ms); }
+    close() { this.closed = true; }
   },
   Attachments: { addAvailablePDF: async () => false },
   HTTP: {
@@ -80,6 +108,7 @@ globalThis.Zotero = {
     },
     unregisterObserver(value) {
       assert.equal(value, observer);
+      observer = undefined;
     },
   },
   debug() {},
@@ -94,19 +123,41 @@ assert.equal(metadata.DOI, "10.1/test");
 
 const { registerItemHook, unregisterItemHook } = await import("../build/src/item-hook.js");
 registerItemHook();
-observer.notify("add", "item", [7]);
-await new Promise((resolve) => setTimeout(resolve, 850));
+observer.notify("add", "item", [7, 8]);
+await new Promise((resolve) => setTimeout(resolve, 900));
 assert.equal(calls[0].method, "GET");
 assert.equal(item.fields.title, "Normalized title");
 assert.equal(item.fields.publicationTitle, "Journal of Tests");
 assert.equal(item.fields.date, "2026-11-15");
 assert.equal(item.creators[0].lastName, "Lovelace");
-assert.equal(added.length, 1);
-observer.notify("add", "item", [8]);
-await new Promise((resolve) => setTimeout(resolve, 850));
 assert.equal(rssItem.fields.DOI, "10.5555/rss-fixture");
 assert.equal(rssItem.fields.abstractNote, "Abstract from OpenAlex");
 assert.equal(added.length, 2);
+
+// 任务1：多个条目共用同一个进度窗，标题栏计数递增，结束后空闲关闭。
+assert.equal(windows.length, 1, "a single enrichment session must reuse one progress window");
+const progressWindow = windows[0];
+assert.equal(progressWindow.shown, 1);
+assert.deepEqual([progressWindow.headlinePosts[0], progressWindow.headlinePosts.at(-1)], ["0/1", "2/2"]);
+assert.equal(progressWindow.timers.length, 0, "close timing must be owned by the progress module");
+assert.equal(lines.length, 1, "the progress window must own exactly one line");
+assert.match(lines[0].text, /2 项已补全/);
+assert.equal(lines[0].icons.at(-1), "tick");
+await new Promise((resolve) => setTimeout(resolve, 4200));
+assert.equal(progressWindow.closed, true, "the progress window must close itself when idle");
 unregisterItemHook();
 
-console.log("rss-helper tests passed: Crossref lookup + item observer enrichment");
+// 任务1：打包产物必须能按 Zotero 插件入口加载，并干净地 startup/shutdown。
+const bundle = readFileSync(new URL("../build/bootstrap.js", import.meta.url), "utf8");
+const context = { Zotero: globalThis.Zotero, console };
+vm.createContext(context);
+vm.runInContext(bundle, context);
+assert.equal(typeof context.startup, "function");
+assert.equal(typeof context.onMainWindowLoad, "function");
+context.startup();
+context.onMainWindowLoad({ window: {} });
+context.onMainWindowUnload({ window: {} });
+context.shutdown();
+assert.equal(observer, undefined, "shutdown must unregister the item observer");
+
+console.log("rss-helper tests passed: Crossref lookup + item observer enrichment + bundle lifecycle");

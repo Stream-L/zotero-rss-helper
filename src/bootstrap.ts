@@ -1,6 +1,7 @@
 import { lookupCrossref, mergeMetadata } from "./crossref";
-import { recognize, type RssEntryLike } from "./rules";
 import { registerItemHook, unregisterItemHook } from "./item-hook";
+import { enrichmentProgress } from "./progress";
+import { recognize, type RssEntryLike } from "./rules";
 
 export async function enrichRssEntry(entry: RssEntryLike): Promise<RssEntryLike> {
   const identity = recognize(entry);
@@ -38,4 +39,5 @@ export function onMainWindowUnload(): void {
 
 export function shutdown(): void {
   unregisterItemHook();
+  enrichmentProgress.dispose();
 }

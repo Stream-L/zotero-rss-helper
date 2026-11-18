@@ -7,3 +7,6 @@ dist/
 *.xpi
 *.zip
 *.log
+_research/
+_scratch/
+_backup/
