@@ -326,7 +326,7 @@ globalThis.Zotero.HTTP.request = async (method, url, options) => {
   screenRequests.push({ url, body, auth: options.headers.Authorization });
   return { response: { choices: [{ message: { content: JSON.stringify({ level: "important", score: 5, reason: "方法相关", topic: "LLM" }) } }] } };
 };
-const { screenItem, levelTag } = await import("../build/src/screen.js");
+const { screenItem, screenItems, levelTag } = await import("../build/src/screen.js");
 assert.equal(await screenItem(tagItem), "important");
 assert.deepEqual(tagItem.tags, ["RSS/重要"]);
 assert.deepEqual(colorCall, { libraryID: 1, name: "RSS/重要", color: "#e03131" });
@@ -523,10 +523,81 @@ await flush();
 assert.ok(tagItem.tags.includes("rss/test"), "the probe action must add rss/test to the selected item");
 assert.deepEqual(colorCall, { libraryID: 1, name: "rss/test", color: "#5c7c9a" }, "rss/test must get the gray-blue color");
 
-// RSS 订阅右键：feed 选中时通过 libraryID 取条目并整批 AI 筛选。
+// 批量筛选：3 个条目必须合并成 1 个请求，进度一次定好总数，结果逐个落到标签上。
+const makeBatchItem = (id, title) => ({
+  id,
+  libraryID: 1,
+  tags: [],
+  getField(field) {
+    if (field === "title") return title;
+    if (field === "abstractNote") return `${title} 的摘要内容`;
+    if (field === "publicationTitle") return "Test Journal";
+    if (field === "date") return "2026-11-18";
+    return "";
+  },
+  addTag(tag) {
+    if (!this.tags.includes(tag)) this.tags.push(tag);
+  },
+  removeTag(tag) {
+    this.tags = this.tags.filter((existing) => existing !== tag);
+  },
+  getTags() {
+    return [];
+  },
+  async saveTx() {},
+});
+const batchItems = [
+  makeBatchItem(101, "Supply chain resilience paper"),
+  makeBatchItem(102, "Unrelated llama farming paper"),
+  makeBatchItem(103, "Platform governance paper"),
+];
+let batchRequests = 0;
+globalThis.Zotero.HTTP.request = async () => {
+  batchRequests += 1;
+  return {
+    response: {
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              results: [
+                { i: 1, level: "important", reason: "切中方向" },
+                { i: 2, level: "skip", reason: "无关" },
+                { i: 3, level: "watch", reason: "可借鉴" },
+              ],
+            }),
+          },
+        },
+      ],
+    },
+  };
+};
+await screenItems(batchItems, "批量测试");
+assert.equal(batchRequests, 1, "three items must be screened in a single request");
+assert.ok(batchItems[0].tags.includes(levelTag("important")), "first batch item must be tagged important");
+assert.equal(batchItems[1].tags.length, 0, "skipped items stay untagged by default");
+assert.ok(batchItems[2].tags.includes(levelTag("watch")), "third batch item must be tagged watch");
+const batchWindow = windows.at(-1);
+assert.deepEqual(
+  [batchWindow.headlinePosts[0], batchWindow.headlinePosts.at(-1)],
+  ["0/3", "3/3"],
+  "batch progress must count against the declared total",
+);
+assert.match(lines.at(-1).text, /重要 1 · 关注 1 · 略过 1/);
+
+
+// RSS 订阅右键：feed 选中时通过 libraryID 取条目；只有 1 条时走单篇工具调用路径。
 tagItem.tags = [];
 globalThis.Zotero.HTTP.request = async () => ({
-  response: { choices: [{ message: { content: JSON.stringify({ level: "important", score: 5, reason: "相关", topic: "运营" }) } }] },
+  response: {
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({ level: "important", score: 5, reason: "相关", topic: "运营" }),
+        },
+      },
+    ],
+  },
 });
 feedQueries.length = 0;
 collectionMenus[0].children[0].children[0].listeners.command();

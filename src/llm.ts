@@ -244,18 +244,26 @@ function parseJsonObject(content: string): Record<string, unknown> {
   }
 }
 
-/** 纯 JSON 调用，不带工具。response_format 不被支持时自动降级重试一次。 */
-export async function chatJSON(system: string, user: string, maxTokens = 512): Promise<Record<string, unknown>> {
-  const profile = await resolveLlmProfile();
-  if (!profile) throw new Error("未配置 AI 接口");
+/**
+ * 用已经解析好的配置发一次纯 JSON 请求。
+ * 批量筛选时一次解析、多次复用，避免每个条目都重复读 pref/解密/写日志。
+ */
+export async function chatJSONWith(
+  profile: LlmProfile,
+  system: string,
+  user: string,
+  maxTokens = 512,
+): Promise<Record<string, unknown>> {
   const messages = [
     { role: "system" as const, content: system },
     { role: "user" as const, content: user },
   ];
+  // 批量筛选一次要输出多条结果，不能被配置里的默认 maxTokens 卡住；上限 2048 防止请求过大。
+  const budget = Math.max(64, Math.min(maxTokens, 2048));
   try {
     const { content } = await postChat(profile, {
       messages,
-      max_tokens: Math.min(maxTokens, profile.maxTokens),
+      max_tokens: budget,
       response_format: { type: "json_object" },
     });
     return parseJsonObject(content);
@@ -263,10 +271,17 @@ export async function chatJSON(system: string, user: string, maxTokens = 512): P
     logEvent("AI", `json_object request failed, retrying without response_format: ${String(error)}`);
     const { content } = await postChat(profile, {
       messages,
-      max_tokens: Math.min(maxTokens, profile.maxTokens),
+      max_tokens: budget,
     });
     return parseJsonObject(content);
   }
+}
+
+/** 纯 JSON 调用，不带工具。response_format 不被支持时自动降级重试一次。 */
+export async function chatJSON(system: string, user: string, maxTokens = 512): Promise<Record<string, unknown>> {
+  const profile = await resolveLlmProfile();
+  if (!profile) throw new Error("未配置 AI 接口");
+  return chatJSONWith(profile, system, user, maxTokens);
 }
 
 /**

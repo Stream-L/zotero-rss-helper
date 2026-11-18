@@ -5,7 +5,7 @@
  * - 模型可先调用工具查条目详情和库内常用标签，再下结论；
  * - 标签名可在设置页改，颜色由 Zotero.Tags.setColor 设置。
  */
-import { chatEndpoint, chatWithTools, getLlmProfile, type ToolDefinition } from "./llm";
+import { chatEndpoint, chatJSONWith, chatWithTools, getLlmProfile, type LlmProfile, type ToolDefinition } from "./llm";
 import { logEvent } from "./log";
 import { enrichmentProgress } from "./progress";
 import { getSetting, getTagHintCount, getTextSetting } from "./settings";
@@ -103,7 +103,7 @@ export async function fetchLibraryTags(libraryID: number, limit = getTagHintCoun
   return (await fetchLibraryTagStats(libraryID, limit)).map((stat) => stat.name);
 }
 
-function buildSystemPrompt(tagHints: string[] = []): string {
+function buildSystemPrompt(tagHints: string[] = [], batch = false): string {
   const custom = getTextSetting("customPrompt");
   const lines = [
     "你是科研文献筛选助手，替研究者从 RSS 推送里挑出真正值得读的论文。",
@@ -125,11 +125,20 @@ function buildSystemPrompt(tagHints: string[] = []): string {
     "- watch：主题相关但创新有限，或方法可借鉴，值得收藏备查；",
     "- skip：与偏好无关、纯综述/征稿/会议通知/书评/新闻稿，或信息不足以判断。",
     "",
-    "如果标题和摘要不足以判断，可以先调用 get_item_details 获取条目完整信息；",
-    "如果需要核对库内标签，可以调用 get_library_tags。不要为了凑数调用工具。",
-    "",
-    '只返回一个 JSON 对象，不要输出其他文本：{"level":"important|watch|skip","score":1-5,"reason":"不超过40字的中文理由","topic":"主题关键词","suggestedTag":"可选，必须是库内常用标签之一"}',
   );
+  if (batch) {
+    lines.push(
+      '只返回一个 JSON 对象，不要输出其他文本：{"results":[{"i":1,"level":"important|watch|skip","reason":"不超过30字的中文理由","suggestedTag":"可选，必须是库内常用标签之一"}]}。',
+      "i 是条目的编号，必须覆盖输入里的每一个编号，不能遗漏、不能重复。",
+    );
+  } else {
+    lines.push(
+      "如果标题和摘要不足以判断，可以先调用 get_item_details 获取条目完整信息；",
+      "如果需要核对库内标签，可以调用 get_library_tags。不要为了凑数调用工具。",
+      "",
+      '只返回一个 JSON 对象，不要输出其他文本：{"level":"important|watch|skip","score":1-5,"reason":"不超过40字的中文理由","topic":"主题关键词","suggestedTag":"可选，必须是库内常用标签之一"}',
+    );
+  }
   return lines.join("\n");
 }
 
@@ -266,39 +275,149 @@ export function clearAiTags(item: ItemLike): void {
   for (const tag of levelTags()) item.removeTag(tag);
 }
 
+/** 一次请求处理多少个条目。太小会变慢，太大摘要会被截断、模型也容易漏条目。 */
+const BATCH_SIZE = 6;
+const BATCH_MAX_TOKENS = 1600;
+const BATCH_ABSTRACT_LIMIT = 700;
+
+type BatchAnswer = { i: number; level: Level | null; suggestedTag?: string };
+
+function buildBatchUserPrompt(items: ItemLike[], offset: number): string {
+  const blocks = items.map((item, index) => {
+    const field = (name: string) => String(item.getField(name) ?? "").trim();
+    const abstract = field("abstractNote").replace(/\s+/g, " ");
+    return [
+      `${offset + index + 1}. 标题：${field("title")}`,
+      `   期刊：${field("publicationTitle") || "未知"} ｜ 日期：${field("date") || "未知"}`,
+      `   摘要：${abstract ? abstract.slice(0, BATCH_ABSTRACT_LIMIT) : "（RSS 未提供摘要，按标题判断）"}`,
+    ].join("\n");
+  });
+  return ["请给下面每一篇论文分级，按编号输出 results：", "", ...blocks].join("\n");
+}
+
+/** 一批条目共用一次请求；返回的编号是全局编号（offset + 序号）。 */
+async function screenBatch(
+  profile: LlmProfile,
+  items: ItemLike[],
+  tagHints: string[],
+  offset: number,
+): Promise<BatchAnswer[]> {
+  const answer = await chatJSONWith(
+    profile,
+    buildSystemPrompt(tagHints, true),
+    buildBatchUserPrompt(items, offset),
+    BATCH_MAX_TOKENS,
+  );
+  const raw = answer.results;
+  if (!Array.isArray(raw)) {
+    throw new Error(`模型没有返回 results 数组：${JSON.stringify(answer).slice(0, 120)}`);
+  }
+  return raw.map((entry) => {
+    const row = entry as Record<string, unknown>;
+    return {
+      i: Number(row.i) || 0,
+      level: normalizeLevel(row.level),
+      suggestedTag: typeof row.suggestedTag === "string" ? row.suggestedTag.trim() : undefined,
+    };
+  });
+}
+
+let screening = false;
+
 /** 菜单入口：多选条目批量筛选，用同一个弱进度窗刷新进度。 */
 export async function screenItems(items: ItemLike[], source = "AI 筛选"): Promise<void> {
   if (!items.length) return;
-  logEvent("AI", `screen start: ${items.length} item(s), source=${source}`);
-  const profile = await getLlmProfile();
-  if (!profile) {
-    logEvent("AI", "screen aborted: no usable profile");
-    toast.show("AI 未配置：插件设置里没有 Key，Zotero GPT 的 Key 也读不到，详见 rss-helper.log", "cross");
+  if (screening) {
+    toast.show("已有一批筛选在运行，请等它结束", "cross");
     return;
   }
-  logEvent("AI", `screen profile: ${profile.source} · ${profile.model} @ ${chatEndpoint(profile.baseUrl)}`);
-  const tagHints = getSetting("useLibraryTags") ? await fetchLibraryTags(tagHintLibraryID()) : [];
-  const counts: Record<Level, number> = { important: 0, watch: 0, skip: 0 };
-  let failed = 0;
-  let firstError = "";
-  enrichmentProgress.begin(`RSS Helper · ${source}`, "筛选");
-  for (const item of items) {
-    const id = item.id ?? 0;
-    if (id) enrichmentProgress.start(id, String(item.getField("title") ?? "未命名条目"));
-    try {
-      counts[await screenItem(item, { tagHints })] += 1;
-      if (id) enrichmentProgress.succeed(id);
-    } catch (error) {
-      failed += 1;
-      if (!firstError) firstError = String(error);
-      if (id) enrichmentProgress.fail(id);
-      logEvent("AI", `screen failed for item ${item.id}: ${String(error)}`);
+  screening = true;
+  try {
+    logEvent("AI", `screen start: ${items.length} item(s), source=${source}`);
+    const profile = await getLlmProfile();
+    if (!profile) {
+      logEvent("AI", "screen aborted: no usable profile");
+      toast.show("AI 未配置：插件设置里没有 Key，Zotero GPT 的 Key 也读不到，详见 rss-helper.log", "cross");
+      return;
     }
+    logEvent("AI", `screen profile: ${profile.source} · ${profile.model} @ ${chatEndpoint(profile.baseUrl)}`);
+    const tagHints = getSetting("useLibraryTags") ? await fetchLibraryTags(tagHintLibraryID()) : [];
+    const counts: Record<Level, number> = { important: 0, watch: 0, skip: 0 };
+    let failed = 0;
+    let firstError = "";
+    const startedAt = Date.now();
+    enrichmentProgress.beginTotal(`RSS Helper · ${source}`, "筛选", items.length);
+
+    // 只选了一篇时走工具调用路径：模型缺摘要可以自己取详情，也符合设置页里「工具调用」的说明。
+    if (items.length === 1) {
+      try {
+        const level = await screenItem(items[0], { tagHints });
+        counts[level] += 1;
+        enrichmentProgress.tick({ succeeded: 1 }, `已筛选 1/1（${level}）`);
+        const parts = [`重要 ${counts.important}`, `关注 ${counts.watch}`, `略过 ${counts.skip}`];
+        enrichmentProgress.summarize(parts.join(" · "), "success");
+        logEvent("AI", `screen done: 1 item in ${Date.now() - startedAt}ms (tool path)`);
+      } catch (error) {
+        failed = 1;
+        firstError = String(error);
+        enrichmentProgress.tick({ failed: 1 }, `筛选失败：${String(error).slice(0, 60)}`);
+        enrichmentProgress.summarize(`失败 1；错误：${firstError.slice(0, 160)}`, "failed");
+        logEvent("AI", `screen failed for item ${items[0].id}: ${String(error)}`);
+      }
+      return;
+    }
+
+    for (let offset = 0; offset < items.length; offset += BATCH_SIZE) {
+      const chunk = items.slice(offset, offset + BATCH_SIZE);
+      const chunkStarted = Date.now();
+      let answers: BatchAnswer[] = [];
+      try {
+        answers = await screenBatch(profile, chunk, tagHints, offset);
+        logEvent(
+          "AI",
+          `batch ${offset + 1}-${offset + chunk.length} ok: ${answers.length} result(s) in ${Date.now() - chunkStarted}ms`,
+        );
+      } catch (error) {
+        const chunkFailed = chunk.length;
+        failed += chunkFailed;
+        if (!firstError) firstError = String(error);
+        logEvent("AI", `batch ${offset + 1}-${offset + chunk.length} failed: ${String(error)}`);
+        enrichmentProgress.tick({ failed: chunkFailed }, `批次失败：${String(error).slice(0, 60)}`);
+        continue;
+      }
+
+      let ok = 0;
+      let chunkFailed = 0;
+      for (let index = 0; index < chunk.length; index += 1) {
+        const item = chunk[index];
+        const answer = answers.find((entry) => entry.i === offset + index + 1) ?? answers[index];
+        try {
+          if (!answer?.level) throw new Error(`模型没有返回第 ${offset + index + 1} 条的分级`);
+          if (answer.level === "skip") await applySkip(item);
+          else await applyLevel(item, answer.level, answer.suggestedTag);
+          counts[answer.level] += 1;
+          ok += 1;
+        } catch (error) {
+          failed += 1;
+          chunkFailed += 1;
+          if (!firstError) firstError = String(error);
+          logEvent("AI", `screen failed for item ${item.id}: ${String(error)}`);
+        }
+      }
+      enrichmentProgress.tick(
+        { succeeded: ok, failed: chunkFailed },
+        `已筛选 ${Math.min(offset + chunk.length, items.length)}/${items.length}`,
+      );
+    }
+
+    logEvent("AI", `screen done: ${items.length} item(s) in ${Date.now() - startedAt}ms, failed=${failed}`);
+    const parts = [`重要 ${counts.important}`, `关注 ${counts.watch}`, `略过 ${counts.skip}`];
+    if (failed) parts.push(`失败 ${failed}`);
+    const summary = failed && firstError ? `${parts.join(" · ")}；首个错误：${firstError.slice(0, 160)}` : parts.join(" · ");
+    enrichmentProgress.summarize(summary, failed ? "failed" : "success");
+  } finally {
+    screening = false;
   }
-  const parts = [`重要 ${counts.important}`, `关注 ${counts.watch}`, `略过 ${counts.skip}`];
-  if (failed) parts.push(`失败 ${failed}`);
-  const summary = failed && firstError ? `${parts.join(" · ")}；首个错误：${firstError.slice(0, 160)}` : parts.join(" · ");
-  enrichmentProgress.summarize(summary, failed ? "failed" : "success");
 }
 
 type CollectionLike = {

@@ -2,7 +2,7 @@
 
 Zotero RSS Helper improves the way paper RSS entries become Zotero items.
 
-**状态：1.0.0 正式版 | Status: 1.0.0 stable.** 补全、设置页、右键菜单、翻译联动、AI 分级标签、邮件转 RSS 均可用；AI 部分依赖外部模型服务和 Key，配置见下文。
+**状态：1.0.1 正式版 | Status: 1.0.1 stable.** 补全、设置页、右键菜单、翻译联动、AI 分级标签、邮件转 RSS 均可用；AI 部分依赖外部模型服务和 Key，配置见下文。1.0.1 起 AI 筛选按 6 篇一批合并请求、进度一次定好总数，菜单项带图标。
 
 ## 解决的问题 | Problem
 
@@ -72,9 +72,10 @@ Settings cover auto-enrichment, auto-translation through Translate for Zotero, a
 
 - 只标「重要」和「关注」，略过默认不标；重复筛选会替换旧标签，不会越积越多；
 - 支持多选条目右键筛选，也支持在**分类**（期刊/专题）或 **RSS 订阅**上右键整批筛选；
+- **多选时按 6 篇一批合并成一个请求**（不再逐条请求），7 篇大约 2 个请求；进度按「已筛选 x/总数」一次定好总数，不会出现 4/5 这种漂移；
 - 库内高频标签会作为「研究领域线索」写进系统提示词；设置页可以先预览标签、决定数量，再「从库内标签归纳领域」生成一段领域描述；
-- 模型可以先调用内置工具 `get_item_details`（读完整摘要、Extra、已有标签）和 `get_library_tags`（读库内高频标签），再给结论；最多两轮工具调用，最后强制 JSON 输出；
-- 返回 `level`、`score`、`reason`、`topic`，可选 `suggestedTag`（必须来自库内高频标签）。
+- 单篇条目仍允许模型调用内置工具 `get_item_details`（读完整摘要、Extra、已有标签）和 `get_library_tags`（读库内高频标签），再给结论；批量模式直接按标题+摘要判断，少一次往返、快很多；
+- 返回 `level`、`reason`，可选 `suggestedTag`（必须来自库内高频标签）。
 
 Screening tags only "important" and "watch" by default, works on multi-selected items and on a whole collection via its context menu, and lets the model call two read-only tools (item details, library tag frequency) before answering. Only two tool rounds are allowed, then a JSON answer is forced.
 
@@ -109,18 +110,16 @@ On items: enrich, translate, AI-screen, clear AI tags, and a `rss/test` probe. O
 
 Wiley、Springer 的旧式 `/feed/...`、`/journal/<id>/rss` 路径会 404；IEEE、MDPI 对脚本抓取返回 418 / Access Denied，但 Zotero 内部订阅未必受限，值得在 Zotero 里直接试。中文期刊（知网/万方/维普）没有官方 RSS，推荐走下面的学术快讯邮件。
 
-Google 学术快讯邮件转 RSS：
+Google 学术快讯邮件是离线转换，不需要另起服务：
 
 ```powershell
 # 把「创建快讯」邮件原文存成 .eml，然后：
 node scripts/eml-to-rss.mjs "LLM recommendation - 新的结果.eml" dist/gs-alert.rss
-# 或起一个本地服务，让 Zotero 订阅 http://127.0.0.1:8787/gs-alert.rss
-node scripts/serve-rss.mjs
 ```
 
-Zotero 只接受 http/https 订阅地址，不能直接订阅本地文件，所以要么用本地服务，要么把生成的 RSS 托管到自己的服务器/静态托管。邮件解析不依赖网络，条目链接会还原成出版商原始地址；中文标题条目在补全阶段会被识别为「无 DOI 的中文条目」并保留 RSS 原始元数据，不会被塞进错误的英文论文。
+生成的 `dist/gs-alert.rss` 是普通 RSS 文件。Zotero 只接受 http/https 订阅地址、不能直接订阅本地文件，所以这个转换结果需要你放到自己的静态托管/网盘直链上用；不想托管就不用这条路径，直接订阅上面列出的出版商 RSS。转换与解析完全离线，条目链接会还原成出版商原始地址；中文标题条目在补全阶段会被识别为「无 DOI 的中文条目」并保留 RSS 原始元数据，不会被塞进错误的英文论文。
 
-Verified publisher feeds are listed above; Wiley/Springer legacy paths 404, IEEE/MDPI block scrapers. Chinese journals have no official RSS — use Google Scholar alert e-mail plus `scripts/eml-to-rss.mjs`. Zotero only accepts http(s) feed URLs, so serve the generated RSS locally with `scripts/serve-rss.mjs` or host it yourself.
+Verified publisher feeds are listed above; Wiley/Springer legacy paths 404, IEEE/MDPI block scrapers. The Google Scholar alert e-mail can be converted offline with `scripts/eml-to-rss.mjs`; Zotero still needs an http(s) URL, so host the generated file yourself if you want to subscribe. No extra local server is involved.
 
 ## 日志与排查 | Logs and troubleshooting
 

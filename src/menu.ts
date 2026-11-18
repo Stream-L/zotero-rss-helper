@@ -14,6 +14,10 @@ const ITEM_MENU_ID = "rss-helper-itemmenu";
 const COLLECTION_MENU_ID = "rss-helper-collectionmenu";
 const MENU_LABEL = "RSS Helper";
 
+/** 与 content/icons/rss-helper.svg 一致的 16×16 图标，内联成 data URI，菜单项不依赖 chrome 注册。 */
+const MENU_ICON =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+PHJlY3Qgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2IiByeD0iNCIgZmlsbD0iI2U2N2UyMiIvPjxjaXJjbGUgY3g9IjUiIGN5PSIxMSIgcj0iMS41IiBmaWxsPSIjZmZmIi8+PHBhdGggZD0iTTQuNSA3LjJhNC4zIDQuMyAwIDAgMSA0LjMgNC4zTTQuNSAzLjhBNy43IDcuNyAwIDAgMSAxMi4yIDExLjUiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjciIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjwvc3ZnPg==";
+
 type CollectionLike = {
   name?: string;
   loadAllData?(): Promise<unknown>;
@@ -86,6 +90,12 @@ async function feedItems(libraryID: number | null): Promise<ItemLike[]> {
 function addMenuItem(doc: any, popup: any, label: string, command: () => void | Promise<void>): void {
   const item = doc.createXULElement("menuitem");
   item.setAttribute("label", label);
+  // 别的插件（如 Actions & Tags、pdf2zh）的菜单项都带图标：menuitem-iconic + image 属性。
+  item.setAttribute("class", "menuitem-iconic");
+  item.setAttribute("image", MENU_ICON);
+  try {
+    item.style.setProperty("list-style-image", `url("${MENU_ICON}")`);
+  } catch {}
   item.addEventListener("command", () => {
     logEvent("menu", `clicked: ${label}`);
     try {
@@ -104,6 +114,11 @@ function addMenu(doc: any, parent: any, id: string): any {
   const menu = doc.createXULElement("menu");
   menu.id = id;
   menu.setAttribute("label", MENU_LABEL);
+  menu.setAttribute("class", "menu-iconic");
+  menu.setAttribute("image", MENU_ICON);
+  try {
+    menu.style.setProperty("list-style-image", `url("${MENU_ICON}")`);
+  } catch {}
   const popup = doc.createXULElement("menupopup");
   menu.appendChild(popup);
   parent.appendChild(menu);

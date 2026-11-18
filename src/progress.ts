@@ -57,6 +57,32 @@ class EnrichmentProgress {
     this.verb = verb;
   }
 
+  /**
+   * 批量任务开场：一次把总数定下来，避免边跑边涨导致「4/5」这种看起来不准确的计数。
+   * 配合 tick() 使用，适合一次处理一整批（例如一批条目合并成一个 AI 请求）。
+   */
+  beginTotal(headline: string, verb: string, total: number): void {
+    this.reset();
+    this.headline = headline;
+    this.verb = verb;
+    this.total = Math.max(0, total);
+    if (this.total === 0) return;
+    if (!this.openWindow(`准备${this.verb}…`)) return;
+    this.finished = false;
+    this.updateHeadline();
+    this.paint("pending", `${this.verb}中… 0/${this.total}`);
+  }
+
+  /** 批量任务里推进计数；done 追上 total 时自动收尾。 */
+  tick(delta: { succeeded?: number; skipped?: number; failed?: number }, text?: string): void {
+    this.succeeded += delta.succeeded ?? 0;
+    this.skipped += delta.skipped ?? 0;
+    this.failed += delta.failed ?? 0;
+    this.updateHeadline();
+    if (text) this.paint("pending", text);
+    if (this.succeeded + this.skipped + this.failed >= this.total) this.finish();
+  }
+
   /** 全部完成后用自定义汇总替换默认文案（例如 AI 筛选的分级计数）。 */
   summarize(text: string, state: EnrichState = "success"): void {
     this.summary = text;
