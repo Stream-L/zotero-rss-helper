@@ -43,8 +43,12 @@ const rssItem = {
   async saveTx() { added.push(this); },
 };
 
+const prefs = new Map();
 globalThis.Zotero = {
-  Prefs: { get: () => false, set() {} },
+  Prefs: {
+    get(key) { return prefs.has(key) ? prefs.get(key) : undefined; },
+    set(key, value) { prefs.set(key, value); },
+  },
   ProgressWindow: class {
     constructor(options) {
       this.options = options;
@@ -146,6 +150,38 @@ assert.equal(lines[0].icons.at(-1), "tick");
 await new Promise((resolve) => setTimeout(resolve, 4200));
 assert.equal(progressWindow.closed, true, "the progress window must close itself when idle");
 unregisterItemHook();
+
+// 任务2：设置项走 extensions.rss-helper.* 分支，首次启动补默认值，设置页用完整键名双向绑定。
+const { getSetting, setSetting, ensureDefaults, SETTING_KEYS, FULL_PREF_PREFIX } = await import("../build/src/settings.js");
+assert.equal(getSetting("autoEnrich"), true, "missing pref must fall back to the default");
+assert.equal(getSetting("fetchAttachments"), false);
+setSetting("fetchAttachments", true);
+assert.equal(prefs.get("extensions.rss-helper.fetchAttachments"), true);
+prefs.delete("extensions.rss-helper.fetchAttachments");
+ensureDefaults();
+assert.equal(prefs.get("extensions.rss-helper.autoEnrich"), true);
+assert.equal(prefs.get("extensions.rss-helper.fetchAttachments"), false);
+
+const paneMarkup = readFileSync(new URL("../content/preferences.xhtml", import.meta.url), "utf8");
+for (const key of SETTING_KEYS) {
+  assert.ok(
+    paneMarkup.includes(`preference="${FULL_PREF_PREFIX}${key}"`),
+    `preferences.xhtml must bind ${key} to the full pref key`,
+  );
+}
+
+const { onPrefsLoad, registerPreferencePane } = await import("../build/src/prefs-pane.js");
+const versionLabel = { textContent: "" };
+globalThis.Zotero.RSSHelper = { version: "9.9.9", hooks: { onPrefsLoad } };
+onPrefsLoad({ getElementById: (id) => (id === "rss-helper-version" ? versionLabel : null) });
+assert.match(versionLabel.textContent, /9\.9\.9/);
+
+let paneOptions;
+globalThis.Zotero.initializationPromise = Promise.resolve();
+globalThis.Zotero.PreferencePanes = { async register(options) { paneOptions = options; } };
+await registerPreferencePane("file:///plugin/");
+assert.equal(paneOptions.src, "file:///plugin/content/preferences.xhtml");
+assert.equal(paneOptions.pluginID, "zotero-rss-helper@github.com");
 
 // 任务1：打包产物必须能按 Zotero 插件入口加载，并干净地 startup/shutdown。
 const bundle = readFileSync(new URL("../build/bootstrap.js", import.meta.url), "utf8");

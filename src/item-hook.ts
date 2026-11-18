@@ -1,6 +1,7 @@
 import { lookupCrossref, lookupCrossrefByBibliographic, lookupOpenAlexAbstract, type CrossrefClient, type EnrichedMetadata } from "./crossref";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
+import { getSetting } from "./settings";
 
 type ZoteroItemLike = RssEntryLike & { id?: number; getField?(field: string): unknown; setField?(field: string, value: unknown): void; setCreators?(creators: Array<{ firstName?: string; lastName?: string; creatorType: "author" }>): void; saveTx?(): Promise<unknown>; itemTypeID?: number };
 const pending = new Set<number>();
@@ -60,6 +61,13 @@ export async function enrichItem(item: ZoteroItemLike): Promise<void> {
     }
     const fieldCount = applyMetadata(item, metadata);
     await item.saveTx?.();
+    if (getSetting("fetchAttachments")) {
+      try {
+        await (Zotero.Attachments as any).addAvailablePDF(item, { methods: ["doi", "url", "oa"] });
+      } catch (error) {
+        Zotero.debug(`[rss-helper] PDF lookup failed for item ${id}: ${String(error)}`);
+      }
+    }
     processed.set(id, itemFingerprint(item));
     enrichmentProgress.succeed(id);
     Zotero.debug(`[rss-helper] enriched ${fieldCount}/7 fields${abstractFound ? "" : " (abstract unavailable)"}`);
@@ -72,6 +80,7 @@ export async function enrichItem(item: ZoteroItemLike): Promise<void> {
 
 const observer = { notify(event: string, type: string, ids: Array<number> | number): void {
   if (type !== "item" || !["add", "modify"].includes(event)) return;
+  if (!getSetting("autoEnrich")) return;
   for (const id of Array.isArray(ids) ? ids : [ids]) {
     const item = Zotero.Items.get(id) as unknown as ZoteroItemLike | undefined;
     if (!item || item.itemTypeID === 3) continue;

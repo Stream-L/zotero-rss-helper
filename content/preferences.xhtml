@@ -1,0 +1,32 @@
+<vbox
+  id="zotero-prefpane-rss-helper"
+  onload="Zotero.RSSHelper.hooks.onPrefsLoad(document)"
+>
+  <vbox class="main-section">
+    <groupbox aria-labelledby="rss-helper-title">
+      <label><html:h2 id="rss-helper-title">RSS Helper</html:h2></label>
+      <description class="description">
+        对 RSS 订阅新增或更新的条目，用 DOI 或标题向 Crossref 查询，补全标题、作者、期刊、日期等元数据。
+      </description>
+      <checkbox
+        id="rss-helper-autoEnrich"
+        label="自动补全 RSS 条目元数据"
+        preference="extensions.zotero.extensions.rss-helper.autoEnrich"
+      />
+      <description class="description">
+        关闭后，新条目只保留 RSS 原始数据。
+      </description>
+      <checkbox
+        id="rss-helper-fetchAttachments"
+        label="补全成功后尝试下载可用的 PDF"
+        preference="extensions.zotero.extensions.rss-helper.fetchAttachments"
+      />
+      <description class="description">
+        依次尝试 DOI、URL 和开放获取渠道。下载失败只记入日志，不影响已写入的元数据。
+      </description>
+    </groupbox>
+    <vbox>
+      <description id="rss-helper-version" class="description" />
+    </vbox>
+  </vbox>
+</vbox>

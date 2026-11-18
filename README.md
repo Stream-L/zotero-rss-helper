@@ -46,9 +46,18 @@ When an RSS item is added or changed, the plugin:
 7. Open the gear menu, choose **Install Add-on From File...**, and select the XPI.
 8. Restart Zotero if prompted.
 
-安装后，插件会自动处理新增或修改的 RSS 条目，不需要 API key 或账号。
+安装后，插件会自动处理新增或修改的 RSS 条目，不需要 API key 或账号。批量补全时，右下角只保留一个进度提示窗，标题栏显示完成数量，全部结束后自动关闭。
 
-After installation, the plugin works automatically for new and modified RSS items. No API key or account is required.
+After installation, the plugin works automatically for new and modified RSS items. No API key or account is required. A batch shares a single progress window in the lower-right corner; the headline counts finished items and the window closes itself when the batch is done.
+
+## 设置 | Settings
+
+**工具 > 设置 > RSS Helper**：
+
+- **自动补全 RSS 条目元数据**：关闭后新条目只保留 RSS 原始数据（默认开启）；
+- **补全成功后尝试下载可用的 PDF**：通过 DOI、URL、开放获取渠道查找附件（默认关闭）。
+
+Settings live under **Tools > Settings > RSS Helper**: auto-enrichment of new RSS items (on by default) and optional PDF lookup after enrichment (off by default).
 
 ## 后续计划 | Roadmap
 

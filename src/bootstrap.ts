@@ -1,7 +1,15 @@
 import { lookupCrossref, mergeMetadata } from "./crossref";
 import { registerItemHook, unregisterItemHook } from "./item-hook";
+import { PLUGIN_ID, onPrefsLoad, registerPreferencePane } from "./prefs-pane";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
+import { ensureDefaults } from "./settings";
+
+type StartupData = {
+  version?: string;
+  rootURI?: string;
+  resourceURI?: { spec?: string };
+};
 
 export async function enrichRssEntry(entry: RssEntryLike): Promise<RssEntryLike> {
   const identity = recognize(entry);
@@ -20,14 +28,26 @@ export async function enrichRssEntry(entry: RssEntryLike): Promise<RssEntryLike>
   }
 }
 
-export function startup(data?: { resourceURI?: { spec?: string } }): void {
-  Zotero.debug("[rss-helper] startup");
+export function startup(data?: StartupData): void {
+  const rootURI = data?.rootURI ?? data?.resourceURI?.spec;
+  Zotero.debug(`[rss-helper] startup (rootURI=${rootURI ?? "unknown"})`);
+  (Zotero as unknown as { RSSHelper?: unknown }).RSSHelper = {
+    version: data?.version ?? "",
+    hooks: { onPrefsLoad },
+  };
   try {
+    ensureDefaults();
     registerItemHook();
-    Zotero.debug("[rss-helper] item observer registered");
   } catch (error) {
     Zotero.debug(`[rss-helper] item observer setup failed: ${String(error)}`);
   }
+  if (!rootURI) {
+    Zotero.debug("[rss-helper] no rootURI in startup data; settings pane not registered");
+    return;
+  }
+  void registerPreferencePane(rootURI).catch((error: unknown) => {
+    Zotero.debug(`[rss-helper] preference pane registration failed: ${String(error)}`);
+  });
 }
 
 export function onMainWindowLoad(data?: { window?: any }): void {
@@ -40,4 +60,7 @@ export function onMainWindowUnload(): void {
 export function shutdown(): void {
   unregisterItemHook();
   enrichmentProgress.dispose();
+  const zotero = Zotero as unknown as { RSSHelper?: unknown };
+  if (zotero.RSSHelper) delete zotero.RSSHelper;
+  Zotero.debug(`[rss-helper] shutdown (${PLUGIN_ID})`);
 }
