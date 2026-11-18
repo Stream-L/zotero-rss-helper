@@ -37,6 +37,7 @@ export type ItemLike = {
   getField(field: string): unknown;
   addTag(tag: string): void;
   removeTag(tag: string): void;
+  getTags?(): unknown[];
   saveTx?(): Promise<unknown>;
 };
 
@@ -145,8 +146,17 @@ async function applySkip(item: ItemLike): Promise<void> {
     await applyLevel(item, "skip");
     return;
   }
-  for (const tag of levelTags()) item.removeTag(tag);
-  await item.saveTx?.();
+  const existing = new Set(
+    (item.getTags?.() ?? []).map((tag) => String(typeof tag === "string" ? tag : (tag as { tag?: unknown })?.tag ?? "")),
+  );
+  let changed = false;
+  for (const tag of levelTags()) {
+    if (existing.has(tag)) {
+      item.removeTag(tag);
+      changed = true;
+    }
+  }
+  if (changed) await item.saveTx?.();
 }
 
 function toolsFor(item: ItemLike, context: ScreenContext | undefined): ToolDefinition[] {
