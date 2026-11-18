@@ -61,7 +61,7 @@ After installation, the plugin works automatically for new and modified RSS item
 - **我的研究领域与偏好**：一段自然语言，写清方向、方法偏好、不想要的内容；原样进入提示词，可以同时写多个领域；
 - **重要 / 关注 / 略过标签名**：默认 `RSS/重要`、`RSS/关注`、`RSS/略过`，可改成自己习惯的命名；
 - **给「略过」也打灰色标签**：默认关闭，略过的条目不打标签；
-- **参考库内常用标签**：把使用频次最高的 40 个标签作为候选，让模型优先复用已有标签，避免自己造词（默认开启）；
+- **把库内常用标签作为研究领域的线索**：把使用频次最高的 40 个标签写进提示词，帮助模型判断你的方向；设置页另有「从库内标签归纳领域」按钮，可让模型把标签总结成领域描述、直接填进提示词（默认开启）；
 - **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务。API Key 留空时自动读取本机 **Zotero GPT** 插件（`zoterogpt@polygon.org`）保存的 `extensions.zotero.zoterogpt.*`；自己填的 Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。
 
 Settings cover auto-enrichment, optional PDF lookup, auto-translation through Translate for Zotero, and AI screening. The screening prompt is driven by a free-form description of your research areas. An empty API key makes the plugin reuse the key, endpoint, and model already stored by the Zotero GPT plugin; a key entered here is encrypted with the OS key store.
@@ -70,6 +70,7 @@ Settings cover auto-enrichment, optional PDF lookup, auto-translation through Tr
 
 - 只标「重要」和「关注」，略过默认不标；重复筛选会替换旧标签，不会越积越多；
 - 支持多选条目右键筛选，也支持在**分类**（期刊/专题）上右键整批筛选；
+- 库内高频标签会作为「研究领域线索」写进系统提示词；设置页的「从库内标签归纳领域」可以把这些标签总结成一段领域描述，直接覆盖自定义提示词；
 - 模型可以先调用内置工具 `get_item_details`（读完整摘要、Extra、已有标签）和 `get_library_tags`（读库内高频标签），再给结论；最多两轮工具调用，最后强制 JSON 输出；
 - 返回 `level`、`score`、`reason`、`topic`，可选 `suggestedTag`（必须来自库内高频标签）。
 
