@@ -10,3 +10,4 @@ dist/
 _research/
 _scratch/
 _backup/
+*.eml

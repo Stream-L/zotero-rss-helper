@@ -46,7 +46,34 @@ const rssItem = {
   setCreators(creators) { this.creators = creators; },
   async saveTx() { added.push(this); },
 };
-
+const zhItem = {
+  id: 9,
+  itemTypeID: 22,
+  fields: {
+    title: "供应链数字化对企业韧性的影响研究",
+    abstractNote: "本文基于上市公司样本……",
+    url: "https://www.cnki.net/kcms/detail/11.1234.f.20261115.html",
+    extra: "",
+  },
+  getField(field) { return this.fields[field]; },
+  setField(field, value) { this.fields[field] = value; },
+  setCreators(creators) { this.creators = creators; },
+  async saveTx() { added.push(this); },
+};
+const oddItem = {
+  id: 10,
+  itemTypeID: 22,
+  fields: {
+    title: "Odd paper about llama farming in the Andes",
+    abstractNote: "",
+    url: "https://example.org/odd-paper",
+    extra: "",
+  },
+  getField(field) { return this.fields[field]; },
+  setField(field, value) { this.fields[field] = value; },
+  setCreators(creators) { this.creators = creators; },
+  async saveTx() { added.push(this); },
+};
 const prefs = new Map();
 globalThis.Zotero = {
   Prefs: {
@@ -91,7 +118,11 @@ globalThis.Zotero = {
         return { response: { abstract_inverted_index: { "Abstract": [0], "from": [1], "OpenAlex": [2] } } };
       }
       if (url.includes("query.bibliographic")) {
-        return { response: { message: { items: [{ DOI: "10.5555/rss-fixture", title: ["RSS fixture title"] }] } } };
+        const decoded = decodeURIComponent(url);
+        if (decoded.includes("Odd paper")) {
+          return { response: { message: { items: [{ DOI: "10.5555/odd", title: ["Completely unrelated topic in another field"] }] } } };
+        }
+        return { response: { message: { items: [{ DOI: "10.5555/rss-fixture", title: ["When ratings speak louder than words: Seek alpha in Seeking Alpha"] }] } } };
       }
       return {
         response: {
@@ -110,7 +141,7 @@ globalThis.Zotero = {
     },
   },
   Items: {
-    get: (id) => (id === 7 ? item : id === 8 ? rssItem : undefined),
+    get: (id) => (id === 7 ? item : id === 8 ? rssItem : id === 9 ? zhItem : id === 10 ? oddItem : undefined),
     async getAll(libraryID) {
       feedQueries.push(libraryID);
       return [tagItem];
@@ -141,6 +172,35 @@ globalThis.Zotero = {
   },
 };
 
+// 测试用假时钟：750ms 防抖和进度窗的空闲关闭都走全局 setTimeout，
+// 换成可控时钟后整个套件不用真的等 5 秒。
+const clock = { now: 0, seq: 0, timers: [] };
+globalThis.setTimeout = (fn, ms = 0, ...args) => {
+  const id = ++clock.seq;
+  clock.timers.push({ id, at: clock.now + ms, fn: () => fn(...args) });
+  return id;
+};
+globalThis.clearTimeout = (id) => {
+  const index = clock.timers.findIndex((timer) => timer.id === id);
+  if (index >= 0) clock.timers.splice(index, 1);
+};
+async function flush() {
+  for (let i = 0; i < 6; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+async function advance(ms) {
+  const target = clock.now + ms;
+  for (;;) {
+    clock.timers.sort((a, b) => a.at - b.at);
+    const next = clock.timers[0];
+    if (!next || next.at > target) break;
+    clock.timers.shift();
+    clock.now = next.at;
+    next.fn();
+    await flush();
+  }
+  clock.now = target;
+}
+
 const metadata = await lookupCrossref(
   { request: async () => ({ response: { message: { DOI: "10.1/test", title: ["Test"] } } }) },
   "10.1/test",
@@ -151,7 +211,7 @@ assert.equal(metadata.DOI, "10.1/test");
 const { registerItemHook, unregisterItemHook } = await import("../build/src/item-hook.js");
 registerItemHook();
 observer.notify("add", "item", [7, 8]);
-await new Promise((resolve) => setTimeout(resolve, 900));
+await advance(900);
 assert.equal(calls[0].method, "GET");
 assert.equal(item.fields.title, "Normalized title");
 assert.equal(item.fields.publicationTitle, "Journal of Tests");
@@ -170,8 +230,19 @@ assert.equal(progressWindow.timers.length, 0, "close timing must be owned by the
 assert.equal(lines.length, 1, "the progress window must own exactly one line");
 assert.match(lines[0].text, /2 项已补全/);
 assert.equal(lines[0].icons.at(-1), "tick");
-await new Promise((resolve) => setTimeout(resolve, 4200));
+await advance(4200);
 assert.equal(progressWindow.closed, true, "the progress window must close itself when idle");
+
+// 中文条目没有 DOI：不做英文书目检索，保留 RSS 原始元数据。
+// 英文条目书目检索到的标题与 RSS 标题差太多时也要拒绝，避免把无关文献套上来。
+observer.notify("add", "item", [9, 10]);
+await advance(900);
+assert.equal(zhItem.fields.title, "供应链数字化对企业韧性的影响研究");
+assert.equal(zhItem.fields.DOI, undefined);
+assert.equal(oddItem.fields.title, "Odd paper about llama farming in the Andes");
+assert.equal(oddItem.fields.DOI, undefined);
+assert.ok(debugLines.some((line) => line.includes("Chinese title without DOI")), "Chinese skip must be logged");
+assert.ok(debugLines.some((line) => line.includes("bibliographic match rejected")), "mismatched bibliographic match must be logged");
 unregisterItemHook();
 
 // 任务2：设置项走 extensions.rss-helper.* 分支，首次启动补默认值，设置页用完整键名双向绑定。
@@ -448,7 +519,7 @@ assert.equal(collectionMenus[0].children[0].children.length, 3, "collection menu
 // 测试按钮：条目右键给 rss/test 打灰蓝色，确认菜单→打标签→设色链路。
 tagItem.tags = [];
 menus[0].children[0].children[4].listeners.command();
-await new Promise((resolve) => setTimeout(resolve, 30));
+await flush();
 assert.ok(tagItem.tags.includes("rss/test"), "the probe action must add rss/test to the selected item");
 assert.deepEqual(colorCall, { libraryID: 1, name: "rss/test", color: "#5c7c9a" }, "rss/test must get the gray-blue color");
 
@@ -459,7 +530,7 @@ globalThis.Zotero.HTTP.request = async () => ({
 });
 feedQueries.length = 0;
 collectionMenus[0].children[0].children[0].listeners.command();
-await new Promise((resolve) => setTimeout(resolve, 80));
+await flush();
 assert.ok(feedQueries.includes(9), "feed menu action must read items of the selected feed library");
 assert.ok(tagItem.tags.includes(levelTag("important")), "feed screening must tag important items");
 unregisterContextMenu(fakeWin);

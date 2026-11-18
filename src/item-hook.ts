@@ -45,6 +45,26 @@ function isMetadataComplete(item: ZoteroItemLike): boolean {
   return Boolean(get("DOI") && get("abstractNote") && get("publicationTitle"));
 }
 
+const CJK = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+/** 中文 RSS 条目大多没有 DOI，按标题去 Crossref 做英文书目检索只会匹配到无关文献。 */
+function looksChinese(text: string): boolean {
+  return CJK.test(text);
+}
+
+/** 用词的 Jaccard 相似度粗判书目检索结果是不是同一篇，避免把同主题的英文文章套到中文标题上。 */
+function titleSimilarity(a: string, b: string): number {
+  const tokens = (text: string) => new Set(
+    text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(" ").filter((word) => word.length > 1)
+  );
+  const left = tokens(a);
+  const right = tokens(b);
+  if (!left.size || !right.size) return 0;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  return shared / (left.size + right.size - shared);
+}
+
 export async function enrichItem(item: ZoteroItemLike): Promise<void> {
   if (!item.id || pending.has(item.id)) return;
   if (!isFeedItem(item)) return;
@@ -60,11 +80,23 @@ export async function enrichItem(item: ZoteroItemLike): Promise<void> {
   try {
     const entry = toEntry(item);
     const identity = recognize(entry);
+    if (!identity.doi && looksChinese(String(entry.title ?? ""))) {
+      processed.set(id, itemFingerprint(item));
+      enrichmentProgress.skip(id);
+      logEvent("enrich", `item ${id}: Chinese title without DOI; kept original RSS metadata`);
+      return;
+    }
     const client = createClient();
     const metadata = identity.doi ? await lookupCrossref(client, identity.doi) : entry.title && entry.title.length >= 10 ? await lookupCrossrefByBibliographic(client, entry.title) : null;
     if (!metadata) {
       processed.set(id, itemFingerprint(item));
       enrichmentProgress.skip(id);
+      return;
+    }
+    if (!identity.doi && titleSimilarity(String(entry.title ?? ""), String(metadata.title ?? "")) < 0.5) {
+      processed.set(id, itemFingerprint(item));
+      enrichmentProgress.skip(id);
+      logEvent("enrich", `item ${id}: bibliographic match rejected (title mismatch: "${metadata.title}")`);
       return;
     }
     let abstractFound = Boolean(metadata.abstractNote);

@@ -2,6 +2,8 @@
 
 Zotero RSS Helper improves the way paper RSS entries become Zotero items.
 
+**状态：1.0.0 正式版 | Status: 1.0.0 stable.** 补全、设置页、右键菜单、翻译联动、AI 分级标签、邮件转 RSS 均可用；AI 部分依赖外部模型服务和 Key，配置见下文。
+
 ## 解决的问题 | Problem
 
 Zotero 的 RSS 默认导入无法可靠地把 RSS 条目匹配到论文元数据。常见结果是：
@@ -95,6 +97,31 @@ Screening tags only "important" and "watch" by default, works on multi-selected 
 
 On items: enrich, translate, AI-screen, clear AI tags, and a `rss/test` probe. On a collection or an RSS feed: screen everything, clear AI tags, or run the probe.
 
+## 出版商 RSS 与学术快讯邮件 | Publisher feeds and alert email
+
+已实测可用的期刊 RSS（直接粘到 Zotero「新建订阅」）：
+
+- Nature：`https://www.nature.com/nature.rss`
+- Science：`https://www.science.org/action/showFeed?type=etoc&feed=rss&jc=science`
+- arXiv：`https://rss.arxiv.org/rss/cs.CL`（换分类改末段）
+- Elsevier / ScienceDirect：`https://rss.sciencedirect.com/publication/science/<ISSN>`，例如 Decision Support Systems 是 `01679236`
+- ACM：`https://dl.acm.org/action/showFeed?type=etoc&feed=rss&jc=<期刊代码>`，例如 ACM Computing Surveys 是 `csur`
+
+Wiley、Springer 的旧式 `/feed/...`、`/journal/<id>/rss` 路径会 404；IEEE、MDPI 对脚本抓取返回 418 / Access Denied，但 Zotero 内部订阅未必受限，值得在 Zotero 里直接试。中文期刊（知网/万方/维普）没有官方 RSS，推荐走下面的学术快讯邮件。
+
+Google 学术快讯邮件转 RSS：
+
+```powershell
+# 把「创建快讯」邮件原文存成 .eml，然后：
+node scripts/eml-to-rss.mjs "LLM recommendation - 新的结果.eml" dist/gs-alert.rss
+# 或起一个本地服务，让 Zotero 订阅 http://127.0.0.1:8787/gs-alert.rss
+node scripts/serve-rss.mjs
+```
+
+Zotero 只接受 http/https 订阅地址，不能直接订阅本地文件，所以要么用本地服务，要么把生成的 RSS 托管到自己的服务器/静态托管。邮件解析不依赖网络，条目链接会还原成出版商原始地址；中文标题条目在补全阶段会被识别为「无 DOI 的中文条目」并保留 RSS 原始元数据，不会被塞进错误的英文论文。
+
+Verified publisher feeds are listed above; Wiley/Springer legacy paths 404, IEEE/MDPI block scrapers. Chinese journals have no official RSS — use Google Scholar alert e-mail plus `scripts/eml-to-rss.mjs`. Zotero only accepts http(s) feed URLs, so serve the generated RSS locally with `scripts/serve-rss.mjs` or host it yourself.
+
 ## 日志与排查 | Logs and troubleshooting
 
 - 日志文件：`<Zotero 数据目录>\rss-helper.log`（通常是 `C:\Users\<你>\Zotero\rss-helper.log`），单文件超过约 200 KB 会自动截断；
@@ -106,10 +133,10 @@ Log file lives in the Zotero data directory as `rss-helper.log` and is truncated
 
 ## 后续计划 | Roadmap
 
-- 用邮件订阅 Google Scholar 的关键词提醒，转成 RSS 分类，复用本套补全 + 筛选流程（待做）；
+- ~~用邮件订阅 Google Scholar 的关键词提醒，转成 RSS 分类，复用本套补全 + 筛选流程~~（1.0.0 已完成，见上节）；
 - 更精确的来源识别，以及基于标签共现的轻量聚类，用来合并同义重复标签（待做）。
 
-Future work: turn Google Scholar e-mail alerts into RSS collections that reuse this enrichment and screening pipeline, and add lightweight tag co-occurrence merging for synonymous tags.
+Future work: lightweight tag co-occurrence merging for synonymous tags. Google Scholar alert e-mail to RSS is implemented in 1.0.0 (see above).
 
 ## License
 

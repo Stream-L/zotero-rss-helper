@@ -37,9 +37,20 @@ function appendLine(line: string): void {
   });
 }
 
+/** 当前加载的插件版本；写在每行日志里，用来识别“是不是还在用旧实例”。 */
+function pluginVersion(): string {
+  try {
+    return String((Zotero as unknown as { RSSHelper?: { version?: string } }).RSSHelper?.version ?? "");
+  } catch {
+    return "";
+  }
+}
+
 /** 写一行诊断日志，同时保留 Zotero.debug 输出。 */
 export function logEvent(scope: string, message: string): void {
   const text = String(message).replace(/\s+/g, " ").slice(0, 2000);
+  const version = pluginVersion();
+  const tag = version ? `v${version} ` : "";
   Zotero.debug(`[rss-helper] ${scope}: ${text}`);
-  appendLine(`[${new Date().toISOString()}] ${scope}: ${text}\n`);
+  appendLine(`[${new Date().toISOString()}] ${tag}${scope}: ${text}\n`);
 }

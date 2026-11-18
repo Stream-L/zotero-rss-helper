@@ -34,11 +34,11 @@ export async function enrichRssEntry(entry: RssEntryLike): Promise<RssEntryLike>
 
 export function startup(data?: StartupData): void {
   const rootURI = data?.rootURI ?? data?.resourceURI?.spec;
-  logEvent("startup", `RSS Helper ${data?.version ?? "?"} starting (rootURI=${rootURI ?? "unknown"})`);
   (Zotero as unknown as { RSSHelper?: unknown }).RSSHelper = {
     version: data?.version ?? "",
     hooks: { onPrefsLoad, onPrefsCommand, onPrefsGeneratePrompt, onPrefsPreviewTags, onPrefsTestAi },
   };
+  logEvent("startup", `RSS Helper ${data?.version ?? "?"} starting (rootURI=${rootURI ?? "unknown"})`);
   try {
     ensureDefaults();
     registerItemHook();
