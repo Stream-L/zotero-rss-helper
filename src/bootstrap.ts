@@ -1,9 +1,11 @@
 import { lookupCrossref, mergeMetadata } from "./crossref";
 import { registerItemHook, unregisterItemHook } from "./item-hook";
-import { PLUGIN_ID, onPrefsLoad, registerPreferencePane } from "./prefs-pane";
+import { registerContextMenu, unregisterContextMenu } from "./menu";
+import { PLUGIN_ID, onPrefsCommand, onPrefsLoad, registerPreferencePane } from "./prefs-pane";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
 import { ensureDefaults } from "./settings";
+import { toast } from "./toast";
 
 type StartupData = {
   version?: string;
@@ -33,7 +35,7 @@ export function startup(data?: StartupData): void {
   Zotero.debug(`[rss-helper] startup (rootURI=${rootURI ?? "unknown"})`);
   (Zotero as unknown as { RSSHelper?: unknown }).RSSHelper = {
     version: data?.version ?? "",
-    hooks: { onPrefsLoad },
+    hooks: { onPrefsLoad, onPrefsCommand },
   };
   try {
     ensureDefaults();
@@ -51,15 +53,30 @@ export function startup(data?: StartupData): void {
 }
 
 export function onMainWindowLoad(data?: { window?: any }): void {
-  void data;
+  const win = data?.window;
+  if (!win) return;
+  try {
+    registerContextMenu(win);
+  } catch (error) {
+    Zotero.debug(`[rss-helper] context menu registration failed: ${String(error)}`);
+  }
 }
 
-export function onMainWindowUnload(): void {
+export function onMainWindowUnload(data?: { window?: any }): void {
+  const win = data?.window;
+  if (!win) return;
+  try {
+    unregisterContextMenu(win);
+  } catch (error) {
+    Zotero.debug(`[rss-helper] context menu removal failed: ${String(error)}`);
+  }
+  toast.dispose();
 }
 
 export function shutdown(): void {
   unregisterItemHook();
   enrichmentProgress.dispose();
+  toast.dispose();
   const zotero = Zotero as unknown as { RSSHelper?: unknown };
   if (zotero.RSSHelper) delete zotero.RSSHelper;
   Zotero.debug(`[rss-helper] shutdown (${PLUGIN_ID})`);

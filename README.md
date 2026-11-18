@@ -55,9 +55,23 @@ After installation, the plugin works automatically for new and modified RSS item
 **工具 > 设置 > RSS Helper**：
 
 - **自动补全 RSS 条目元数据**：关闭后新条目只保留 RSS 原始数据（默认开启）；
-- **补全成功后尝试下载可用的 PDF**：通过 DOI、URL、开放获取渠道查找附件（默认关闭）。
+- **补全成功后尝试下载可用的 PDF**：通过 DOI、URL、开放获取渠道查找附件（默认关闭）；
+- **补全元数据后自动翻译标题和摘要**：复用本机 Translate for Zotero 插件，译文写进 Extra 的 `titleTranslation` / `abstractTranslation`（默认关闭）；
+- **补全元数据后自动判断重要性**：调用大模型给条目分级并打彩色标签（默认关闭）；
+- **接口地址 / 模型名称 / API Key**：任何 OpenAI 兼容的 `/chat/completions` 服务；API Key 用 `Zotero.OSKeyStore` 加密后保存，不落明文。
 
-Settings live under **Tools > Settings > RSS Helper**: auto-enrichment of new RSS items (on by default) and optional PDF lookup after enrichment (off by default).
+Settings live under **Tools > Settings > RSS Helper**: auto-enrichment, optional PDF lookup, auto-translation through Translate for Zotero, and optional AI importance screening with an OpenAI-compatible endpoint. The API key is encrypted with the OS key store before being written to preferences.
+
+## 右键菜单 | Context menu
+
+选中条目后右键 **RSS Helper** 子菜单：
+
+- **补全元数据**：对选中的 RSS 条目立即执行 Crossref 补全；
+- **翻译标题和摘要**：调用 Translate for Zotero 翻译并写入 Extra；
+- **AI 判断重要性**：调用大模型分级，打上 `RSS/重要`（红）、`RSS/关注`（黄）、`RSS/略过`（灰）标签；
+- **清除 AI 标记**：移除上述三个标签，不影响其他标签。
+
+Select items and use the **RSS Helper** submenu: enrich, translate, screen with AI (colored tags), or clear AI tags.
 
 ## 后续计划 | Roadmap
 

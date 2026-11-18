@@ -1,7 +1,9 @@
 import { lookupCrossref, lookupCrossrefByBibliographic, lookupOpenAlexAbstract, type CrossrefClient, type EnrichedMetadata } from "./crossref";
 import { enrichmentProgress } from "./progress";
 import { recognize, type RssEntryLike } from "./rules";
+import { screenItem } from "./screen";
 import { getSetting } from "./settings";
+import { translateItem } from "./translate";
 
 type ZoteroItemLike = RssEntryLike & { id?: number; getField?(field: string): unknown; setField?(field: string, value: unknown): void; setCreators?(creators: Array<{ firstName?: string; lastName?: string; creatorType: "author" }>): void; saveTx?(): Promise<unknown>; itemTypeID?: number };
 const pending = new Set<number>();
@@ -71,11 +73,26 @@ export async function enrichItem(item: ZoteroItemLike): Promise<void> {
     processed.set(id, itemFingerprint(item));
     enrichmentProgress.succeed(id);
     Zotero.debug(`[rss-helper] enriched ${fieldCount}/7 fields${abstractFound ? "" : " (abstract unavailable)"}`);
+    scheduleFollowUps(item);
   } catch (error) {
     processed.set(id, itemFingerprint(item));
     enrichmentProgress.fail(id);
     Zotero.debug(`[rss-helper] enrichment failure: ${String(error)}`);
   } finally { pending.delete(id); }
+}
+
+/** 补全成功后按设置继续翻译 / AI 筛选；失败只记日志，不打断主流程。 */
+function scheduleFollowUps(item: ZoteroItemLike): void {
+  if (getSetting("autoTranslate")) {
+    void translateItem(item as any)
+      .then((count) => Zotero.debug(`[rss-helper] auto-translate wrote ${count} fields for item ${item.id}`))
+      .catch((error: unknown) => Zotero.debug(`[rss-helper] auto-translate failed for item ${item.id}: ${String(error)}`));
+  }
+  if (getSetting("autoScreen")) {
+    void screenItem(item as any)
+      .then((level) => Zotero.debug(`[rss-helper] auto-screen tagged item ${item.id} as ${level}`))
+      .catch((error: unknown) => Zotero.debug(`[rss-helper] auto-screen failed for item ${item.id}: ${String(error)}`));
+  }
 }
 
 const observer = { notify(event: string, type: string, ids: Array<number> | number): void {

@@ -25,6 +25,67 @@
         依次尝试 DOI、URL 和开放获取渠道。下载失败只记入日志，不影响已写入的元数据。
       </description>
     </groupbox>
+
+    <groupbox aria-labelledby="rss-helper-translate-title">
+      <label><html:h2 id="rss-helper-translate-title">翻译</html:h2></label>
+      <description class="description">
+        复用本机 Translate for Zotero 插件，把译文写进条目的 Extra 字段（titleTranslation / abstractTranslation）。
+      </description>
+      <checkbox
+        id="rss-helper-autoTranslate"
+        label="补全元数据后自动翻译标题和摘要"
+        preference="extensions.zotero.extensions.rss-helper.autoTranslate"
+      />
+      <description class="description">
+        中文条目自动跳过。也可以在条目右键菜单里手动翻译。
+      </description>
+    </groupbox>
+
+    <groupbox aria-labelledby="rss-helper-ai-title">
+      <label><html:h2 id="rss-helper-ai-title">AI 重要文献筛选</html:h2></label>
+      <description class="description">
+        让模型判断 RSS 条目的重要性，用彩色标签标记：重要（红）、关注（黄）、略过（灰）。
+      </description>
+      <checkbox
+        id="rss-helper-autoScreen"
+        label="补全元数据后自动判断重要性"
+        preference="extensions.zotero.extensions.rss-helper.autoScreen"
+      />
+      <description class="description">
+        关闭后仍可在条目右键菜单里手动筛选。
+      </description>
+      <label>接口地址</label>
+      <html:input
+        id="rss-helper-llmBaseUrl"
+        type="text"
+        style="width: 320px;"
+        preference="extensions.zotero.extensions.rss-helper.llmBaseUrl"
+      />
+      <description class="description">
+        例如 https://api.siliconflow.cn/v1，不要带 /chat/completions。
+      </description>
+      <label>模型名称</label>
+      <html:input
+        id="rss-helper-llmModel"
+        type="text"
+        style="width: 320px;"
+        preference="extensions.zotero.extensions.rss-helper.llmModel"
+      />
+      <label>API Key</label>
+      <hbox align="center">
+        <html:input id="rss-helper-apiKey" type="password" style="width: 320px;" placeholder="粘贴后点保存" />
+        <button
+          id="rss-helper-apiKey-save"
+          label="保存"
+          oncommand="Zotero.RSSHelper.hooks.onPrefsCommand(document)"
+        />
+      </hbox>
+      <description id="rss-helper-apiKey-status" class="description">未保存</description>
+      <description class="description">
+        密钥用系统钥匙串加密后保存，不写入明文配置。
+      </description>
+    </groupbox>
+
     <vbox>
       <description id="rss-helper-version" class="description" />
     </vbox>

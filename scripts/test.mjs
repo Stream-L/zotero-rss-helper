@@ -152,7 +152,7 @@ assert.equal(progressWindow.closed, true, "the progress window must close itself
 unregisterItemHook();
 
 // 任务2：设置项走 extensions.rss-helper.* 分支，首次启动补默认值，设置页用完整键名双向绑定。
-const { getSetting, setSetting, ensureDefaults, SETTING_KEYS, FULL_PREF_PREFIX } = await import("../build/src/settings.js");
+const { getSetting, setSetting, ensureDefaults, SETTING_KEYS, TEXT_SETTING_KEYS, FULL_PREF_PREFIX } = await import("../build/src/settings.js");
 assert.equal(getSetting("autoEnrich"), true, "missing pref must fall back to the default");
 assert.equal(getSetting("fetchAttachments"), false);
 setSetting("fetchAttachments", true);
@@ -163,7 +163,7 @@ assert.equal(prefs.get("extensions.rss-helper.autoEnrich"), true);
 assert.equal(prefs.get("extensions.rss-helper.fetchAttachments"), false);
 
 const paneMarkup = readFileSync(new URL("../content/preferences.xhtml", import.meta.url), "utf8");
-for (const key of SETTING_KEYS) {
+for (const key of [...SETTING_KEYS, ...TEXT_SETTING_KEYS]) {
   assert.ok(
     paneMarkup.includes(`preference="${FULL_PREF_PREFIX}${key}"`),
     `preferences.xhtml must bind ${key} to the full pref key`,
@@ -183,7 +183,76 @@ await registerPreferencePane("file:///plugin/");
 assert.equal(paneOptions.src, "file:///plugin/content/preferences.xhtml");
 assert.equal(paneOptions.pluginID, "zotero-rss-helper@github.com");
 
-// 任务1：打包产物必须能按 Zotero 插件入口加载，并干净地 startup/shutdown。
+// 任务3：翻译走本机 Translate for Zotero 插件，译文写入 Extra；中文条目跳过。
+const extraWrites = [];
+globalThis.Zotero.PDFTranslate = {
+  api: { translate: async (text) => ({ result: `译:${text}` }) },
+  data: { ztoolkit: { ExtraField: { setExtraField: async (target, key, value) => { extraWrites.push({ key, value }); } } } },
+};
+const { translateItem, translateItems } = await import("../build/src/translate.js");
+const foreign = {
+  id: 11,
+  fields: { title: "A title", abstractNote: "An abstract", language: "en", extra: "" },
+  getField(f) { return this.fields[f]; },
+  setField(f, v) { this.fields[f] = v; },
+  async saveTx() { this.saved = true; },
+};
+assert.equal(await translateItem(foreign), 2);
+assert.deepEqual(extraWrites.map((w) => w.key), ["titleTranslation", "abstractTranslation"]);
+assert.equal(foreign.saved, true);
+const chinese = { id: 12, fields: { title: "标题", abstractNote: "摘要", language: "zh-CN" }, getField(f) { return this.fields[f]; }, setField() {} };
+assert.equal(await translateItem(chinese), 0, "Chinese items must be skipped");
+delete globalThis.Zotero.PDFTranslate;
+
+// 任务4：AI 分级结果映射成彩色标签，颜色只设一次。
+let colorCall;
+const tagItem = {
+  id: 21,
+  libraryID: 1,
+  tags: [],
+  fields: { title: "Supply chain forecasting with LLMs", abstractNote: "We propose a method.", publicationTitle: "J. Test", date: "2026" },
+  getField(f) { return this.fields[f]; },
+  addTag(tag) { this.tags.push(tag); },
+  removeTag(tag) { this.tags = this.tags.filter((t) => t !== tag); },
+  async saveTx() { this.saved = true; },
+};
+globalThis.Zotero.OSKeyStore = {
+  encrypt: async (value) => `enc:${value}`,
+  decrypt: async (value) => String(value).replace(/^enc:/, ""),
+};
+globalThis.Zotero.Tags = { setColor: async (libraryID, name, color) => { colorCall = { libraryID, name, color }; } };
+prefs.set("extensions.rss-helper.apiKeyEnc", "enc:test-key");
+const originalRequest = globalThis.Zotero.HTTP.request;
+globalThis.Zotero.HTTP.request = async (method, url, options) => {
+  assert.match(url, /\/chat\/completions$/);
+  assert.match(options.headers.Authorization, /^Bearer test-key$/);
+  return { response: { choices: [{ message: { content: JSON.stringify({ level: "important", score: 5, reason: "方法相关", topic: "LLM" }) } }] } };
+};
+const { screenItem } = await import("../build/src/screen.js");
+assert.equal(await screenItem(tagItem), "important");
+assert.deepEqual(tagItem.tags, ["RSS/重要"]);
+assert.deepEqual(colorCall, { libraryID: 1, name: "RSS/重要", color: "#e03131" });
+assert.equal(tagItem.saved, true);
+globalThis.Zotero.HTTP.request = originalRequest;
+delete globalThis.Zotero.Tags;
+
+// 任务4：右键菜单按条目菜单 id 挂载，且重复注册不会产生第二个子菜单。
+const menuRoot = { children: [], appendChild(child) { this.children.push(child); } };
+const fakeDoc = {
+  getElementById: () => null,
+  querySelector: (selector) => (selector === "#zotero-itemmenu" ? menuRoot : null),
+  createXULElement: (tag) => ({ tagName: tag, attrs: {}, children: [], setAttribute(k, v) { this.attrs[k] = v; }, addEventListener() {}, appendChild(child) { this.children.push(child); }, remove() {} }),
+};
+const fakeWin = { document: fakeDoc, ZoteroPane: { getSelectedItems: () => [tagItem] } };
+const { registerContextMenu, unregisterContextMenu } = await import("../build/src/menu.js");
+registerContextMenu(fakeWin);
+registerContextMenu(fakeWin);
+const menus = menuRoot.children.filter((child) => child.id === "rss-helper-itemmenu");
+assert.equal(menus.length, 1, "context menu must be idempotent");
+assert.equal(menus[0].children[0].children.length, 4, "menu must expose four actions");
+unregisterContextMenu(fakeWin);
+
+
 const bundle = readFileSync(new URL("../build/bootstrap.js", import.meta.url), "utf8");
 const context = { Zotero: globalThis.Zotero, console };
 vm.createContext(context);

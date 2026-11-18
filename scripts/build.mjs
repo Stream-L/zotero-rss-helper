@@ -13,7 +13,20 @@ if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);
 await cp("manifest.json", "build/manifest.json");
 await cp("content", "build/content", { recursive: true });
-const modules = ["rules", "crossref", "settings", "prefs-pane", "progress", "item-hook", "bootstrap"];
+const modules = [
+  "rules",
+  "crossref",
+  "settings",
+  "toast",
+  "llm",
+  "translate",
+  "screen",
+  "progress",
+  "prefs-pane",
+  "menu",
+  "item-hook",
+  "bootstrap",
+];
 const bundled = modules.map((name) => {
   const source = readFile(`build/src/${name}.js`, "utf8");
   return source.then((code) => `__modules["./${name}.js"] = function (module, exports, require) {\n${code}\n};`);
